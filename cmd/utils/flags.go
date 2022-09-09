@@ -680,6 +680,10 @@ var (
 		Name:  "no-downloader",
 		Usage: "to disable downloader component",
 	}
+	NoClipDBFlag = cli.BoolFlag{
+		Name:  "no-clipdb",
+		Usage: "to disable clip db download",
+	}
 	DownloaderVerifyFlag = cli.BoolFlag{
 		Name:  "downloader.verify",
 		Usage: "verify snapshots on startup. it will not report founded problems but just re-download broken pieces",
@@ -1436,6 +1440,7 @@ func SetEthConfig(ctx *cli.Context, nodeConfig *nodecfg.Config, cfg *ethconfig.C
 	cfg.Snapshot.KeepBlocks = ctx.GlobalBool(SnapKeepBlocksFlag.Name)
 	cfg.Snapshot.Produce = !ctx.GlobalBool(SnapStopFlag.Name)
 	cfg.Snapshot.NoDownloader = ctx.GlobalBool(NoDownloaderFlag.Name)
+	cfg.NoClipDB = ctx.GlobalBool(NoClipDBFlag.Name)
 	cfg.Snapshot.Verify = ctx.GlobalBool(DownloaderVerifyFlag.Name)
 	cfg.Snapshot.DownloaderAddr = strings.TrimSpace(ctx.GlobalString(DownloaderAddrFlag.Name))
 	if cfg.Snapshot.DownloaderAddr == "" {

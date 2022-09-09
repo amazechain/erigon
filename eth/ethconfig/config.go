@@ -181,6 +181,7 @@ type Config struct {
 
 	Snapshot   Snapshot
 	Downloader *downloadercfg.Cfg
+	NoClipDB   bool
 
 	Dirs datadir.Dirs
 

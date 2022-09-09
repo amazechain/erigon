@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/ledgerwatch/erigon/cmd/downloader/downloader"
+	"github.com/ledgerwatch/erigon/common"
+	"github.com/ledgerwatch/erigon/turbo/clipdb"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -55,6 +59,28 @@ func runErigon(cliCtx *cli.Context) {
 
 	nodeCfg := node.NewNodConfigUrfave(cliCtx)
 	ethCfg := node.NewEthConfigUrfave(cliCtx, nodeCfg)
+
+	if !common.FileExist(nodeCfg.Dirs.Chaindata) && !ethCfg.NoClipDB {
+		log.Info("[ClipDB] start download clipped DB")
+		t := clipdb.LatestTorrent()
+		d, err := downloader.Clip(ethCfg.Downloader, t)
+		if nil != err {
+			log.Error("[ClipDB] downloader ", "err", err)
+			return
+		}
+		downloader.ClipLoop(context.Background(), d, false)
+		if !common.FileExist(filepath.Join(ethCfg.Downloader.DataDir, t.Filename())) {
+			log.Error("[ClipDB] download failed!")
+			return
+		}
+		log.Info("[ClipDB]  un compress files")
+		cont, err := clipdb.Uncompress(context.Background(), filepath.Join(nodeCfg.Dirs.Snap, strings.TrimRight(t.Filename(), ".torrent")), nodeCfg.Dirs.Chaindata)
+		if nil != err {
+			log.Error("[ClipDB] uncompress failed!", "err", err)
+			return
+		}
+		log.Info("[ClipDB] download files", strings.Join(cont, ","))
+	}
 
 	ethNode, err := node.New(nodeCfg, ethCfg, logger)
 	if err != nil {
