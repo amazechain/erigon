@@ -314,13 +314,14 @@ func (g *Genesis) configOrDefault(genesisHash common.Hash) *params.ChainConfig {
 // ToBlock creates the genesis block and writes state of a genesis specification
 // to the given database (or discards it if nil).
 func (g *Genesis) ToBlock() (*types.Block, *state.IntraBlockState, error) {
+	_ = g.Alloc //nil-check
 	var root common.Hash
 	var statedb *state.IntraBlockState
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() { // we may run inside write tx, can't open 2nd write tx in same goroutine
 		defer wg.Done()
-		tmpDB := mdbx.NewMDBX(log.New()).InMem().MapSize(2 * datasize.GB).MustOpen()
+		tmpDB := mdbx.NewMDBX(log.New()).InMem("").MapSize(2 * datasize.GB).MustOpen()
 		defer tmpDB.Close()
 		tx, err := tmpDB.BeginRw(context.Background())
 		if err != nil {
@@ -461,6 +462,9 @@ func (g *Genesis) Write(tx kv.RwTx) (*types.Block, *state.IntraBlockState, error
 		return nil, nil, err
 	}
 	if err := rawdb.WriteBlock(tx, block); err != nil {
+		return nil, nil, err
+	}
+	if err := rawdb.TxNums.WriteForGenesis(tx, 1); err != nil {
 		return nil, nil, err
 	}
 	if err := rawdb.WriteReceipts(tx, block.NumberU64(), nil); err != nil {
@@ -766,19 +770,6 @@ func DeveloperGenesisBlock(period uint64, faucet common.Address) *Genesis {
 	}
 }
 
-func DefaultKilnDevnetGenesisBlock() *Genesis {
-	return &Genesis{
-		Config:     params.KilnDevnetChainConfig,
-		Nonce:      0x1234,
-		Timestamp:  0,
-		GasLimit:   0x400000,
-		Difficulty: big.NewInt(1),
-		Mixhash:    common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000000"),
-		Coinbase:   common.HexToAddress("0x0000000000000000000000000000000000000000"),
-		Alloc:      readPrealloc("allocs/kiln-devnet.json"),
-	}
-}
-
 func readPrealloc(filename string) GenesisAlloc {
 	f, err := allocs.Open(filename)
 	if err != nil {
@@ -822,8 +813,6 @@ func DefaultGenesisBlockByChainName(chain string) *Genesis {
 		return DefaultBorMainnetGenesisBlock()
 	case networkname.BorDevnetChainName:
 		return DefaultBorDevnetGenesisBlock()
-	case networkname.KilnDevnetChainName:
-		return DefaultKilnDevnetGenesisBlock()
 	case networkname.GnosisChainName:
 		return DefaultGnosisGenesisBlock()
 	default:

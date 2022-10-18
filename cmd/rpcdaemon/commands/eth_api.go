@@ -5,6 +5,7 @@ import (
 	"context"
 	"math/big"
 	"sync"
+	"time"
 
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/holiman/uint256"
@@ -12,7 +13,6 @@ import (
 	"github.com/ledgerwatch/erigon-lib/kv"
 	"github.com/ledgerwatch/erigon-lib/kv/kvcache"
 	libstate "github.com/ledgerwatch/erigon-lib/state"
-	"github.com/ledgerwatch/erigon/cmd/state/exec22"
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/common/hexutil"
 	"github.com/ledgerwatch/erigon/common/math"
@@ -103,16 +103,17 @@ type BaseAPI struct {
 	_genesis     *types.Block
 	_genesisLock sync.RWMutex
 
-	_historyV2     *bool
-	_historyV2Lock sync.RWMutex
+	_historyV3     *bool
+	_historyV3Lock sync.RWMutex
 
 	_blockReader services.FullBlockReader
 	_txnReader   services.TxnReader
 	_agg         *libstate.Aggregator22
-	_txNums      *exec22.TxNums
+
+	evmCallTimeout time.Duration
 }
 
-func NewBaseApi(f *rpchelper.Filters, stateCache kvcache.Cache, blockReader services.FullBlockReader, agg *libstate.Aggregator22, txNums *exec22.TxNums, singleNodeMode bool) *BaseAPI {
+func NewBaseApi(f *rpchelper.Filters, stateCache kvcache.Cache, blockReader services.FullBlockReader, agg *libstate.Aggregator22, singleNodeMode bool, evmCallTimeout time.Duration) *BaseAPI {
 	blocksLRUSize := 128 // ~32Mb
 	if !singleNodeMode {
 		blocksLRUSize = 512
@@ -122,7 +123,7 @@ func NewBaseApi(f *rpchelper.Filters, stateCache kvcache.Cache, blockReader serv
 		panic(err)
 	}
 
-	return &BaseAPI{filters: f, stateCache: stateCache, blocksLRU: blocksLRU, _blockReader: blockReader, _txnReader: blockReader, _agg: agg, _txNums: txNums}
+	return &BaseAPI{filters: f, stateCache: stateCache, blocksLRU: blocksLRU, _blockReader: blockReader, _txnReader: blockReader, _agg: agg, evmCallTimeout: evmCallTimeout}
 }
 
 func (api *BaseAPI) chainConfig(tx kv.Tx) (*params.ChainConfig, error) {
@@ -157,6 +158,7 @@ func (api *BaseAPI) blockByHashWithSenders(tx kv.Tx, hash common.Hash) (*types.B
 	if number == nil {
 		return nil, nil
 	}
+
 	return api.blockWithSenders(tx, hash, *number)
 }
 func (api *BaseAPI) blockWithSenders(tx kv.Tx, hash common.Hash, number uint64) (*types.Block, error) {
@@ -188,22 +190,22 @@ func (api *BaseAPI) blockWithSenders(tx kv.Tx, hash common.Hash, number uint64) 
 	return block, nil
 }
 
-func (api *BaseAPI) historyV2(tx kv.Tx) bool {
-	api._historyV2Lock.RLock()
-	historyV2 := api._historyV2
-	api._historyV2Lock.RUnlock()
+func (api *BaseAPI) historyV3(tx kv.Tx) bool {
+	api._historyV3Lock.RLock()
+	historyV3 := api._historyV3
+	api._historyV3Lock.RUnlock()
 
-	if historyV2 != nil {
-		return *historyV2
+	if historyV3 != nil {
+		return *historyV3
 	}
-	enabled, err := rawdb.HistoryV2.Enabled(tx)
+	enabled, err := rawdb.HistoryV3.Enabled(tx)
 	if err != nil {
 		log.Warn("HisoryV2Enabled: read", "err", err)
 		return false
 	}
-	api._historyV2Lock.Lock()
-	api._historyV2 = &enabled
-	api._historyV2Lock.Unlock()
+	api._historyV3Lock.Lock()
+	api._historyV3 = &enabled
+	api._historyV3Lock.Unlock()
 	return enabled
 }
 

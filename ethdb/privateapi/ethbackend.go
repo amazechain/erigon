@@ -13,6 +13,10 @@ import (
 	"github.com/ledgerwatch/erigon-lib/gointerfaces/remote"
 	types2 "github.com/ledgerwatch/erigon-lib/gointerfaces/types"
 	"github.com/ledgerwatch/erigon-lib/kv"
+	"github.com/ledgerwatch/log/v3"
+	"golang.org/x/exp/slices"
+	"google.golang.org/protobuf/types/known/emptypb"
+
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/consensus/serenity"
 	"github.com/ledgerwatch/erigon/core"
@@ -24,10 +28,8 @@ import (
 	"github.com/ledgerwatch/erigon/turbo/builder"
 	"github.com/ledgerwatch/erigon/turbo/engineapi"
 	"github.com/ledgerwatch/erigon/turbo/services"
+	"github.com/ledgerwatch/erigon/turbo/shards"
 	"github.com/ledgerwatch/erigon/turbo/stages/headerdownload"
-	"github.com/ledgerwatch/log/v3"
-	"golang.org/x/exp/slices"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // EthBackendAPIVersion
@@ -49,7 +51,7 @@ type EthBackendServer struct {
 
 	ctx         context.Context
 	eth         EthBackend
-	events      *Events
+	events      *shards.Events
 	db          kv.RoDB
 	blockReader services.BlockAndTxnReader
 	config      *params.ChainConfig
@@ -72,7 +74,7 @@ type EthBackend interface {
 	Peers(ctx context.Context) (*remote.PeersReply, error)
 }
 
-func NewEthBackendServer(ctx context.Context, eth EthBackend, db kv.RwDB, events *Events, blockReader services.BlockAndTxnReader,
+func NewEthBackendServer(ctx context.Context, eth EthBackend, db kv.RwDB, events *shards.Events, blockReader services.BlockAndTxnReader,
 	config *params.ChainConfig, builderFunc builder.BlockBuilderFunc, hd *headerdownload.HeaderDownload, proposing bool,
 ) *EthBackendServer {
 	s := &EthBackendServer{ctx: ctx, eth: eth, events: events, db: db, blockReader: blockReader, config: config,
@@ -417,8 +419,8 @@ func (s *EthBackendServer) getQuickPayloadStatusIfPossible(blockHash common.Hash
 	}
 
 	if !s.hd.POSSync() {
-		log.Debug(fmt.Sprintf("[%s] Still in PoW sync", prefix), "hash", blockHash)
-		return &engineapi.PayloadStatus{Status: remote.EngineStatus_SYNCING, LatestValidHash: common.Hash{}}, nil
+		log.Info(fmt.Sprintf("[%s] Still in PoW sync", prefix), "hash", blockHash)
+		return &engineapi.PayloadStatus{Status: remote.EngineStatus_SYNCING}, nil
 	}
 
 	var canonicalHash common.Hash
@@ -459,17 +461,16 @@ func (s *EthBackendServer) getQuickPayloadStatusIfPossible(blockHash common.Hash
 			return &engineapi.PayloadStatus{Status: remote.EngineStatus_VALID, LatestValidHash: blockHash}, nil
 		}
 
-		if parent == nil && s.hd.PosStatus() == headerdownload.Syncing {
+		if parent == nil && s.hd.PosStatus() != headerdownload.Idle {
+			log.Debug(fmt.Sprintf("[%s] Downloading some other PoS blocks", prefix), "hash", blockHash)
 			return &engineapi.PayloadStatus{Status: remote.EngineStatus_SYNCING}, nil
 		}
 	} else {
-		if header == nil {
-			if s.hd.PosStatus() == headerdownload.Syncing {
-				return &engineapi.PayloadStatus{Status: remote.EngineStatus_SYNCING}, nil
-			}
-			return nil, nil
+		if header == nil && s.hd.PosStatus() != headerdownload.Idle {
+			log.Debug(fmt.Sprintf("[%s] Downloading some other PoS stuff", prefix), "hash", blockHash)
+			return &engineapi.PayloadStatus{Status: remote.EngineStatus_SYNCING}, nil
 		}
-
+		// Following code ensures we skip the fork choice state update if if forkchoiceState.headBlockHash references an ancestor of the head of canonical chain
 		headHash := rawdb.ReadHeadBlockHash(tx)
 		if err != nil {
 			return nil, err
@@ -633,9 +634,11 @@ func (s *EthBackendServer) EngineForkChoiceUpdatedV1(ctx context.Context, req *r
 		Timestamp:             req.PayloadAttributes.Timestamp,
 		PrevRandao:            emptyHeader.MixDigest,
 		SuggestedFeeRecipient: emptyHeader.Coinbase,
+		PayloadId:             s.payloadId,
 	}
 
 	s.builders[s.payloadId] = builder.NewBlockBuilder(s.builderFunc, &param, emptyHeader)
+	log.Debug("BlockBuilder added", "payload", s.payloadId)
 
 	return &remote.EngineForkChoiceUpdatedReply{
 		PayloadStatus: &remote.EnginePayloadStatus{

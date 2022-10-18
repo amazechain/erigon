@@ -312,17 +312,34 @@ func (ff *Filters) SubscribeNewHeads(out chan *types.Header) HeadsSubID {
 }
 
 func (ff *Filters) UnsubscribeHeads(id HeadsSubID) bool {
-	ff.mu.Lock()
-	defer ff.mu.Unlock()
-	if ch, ok := ff.headsSubs[id]; ok {
-		close(ch)
-		delete(ff.headsSubs, id)
-		ff.storeMu.Lock()
-		defer ff.storeMu.Unlock()
-		delete(ff.pendingHeadsStores, id)
-		return true
+	ff.mu.RLock()
+	ch, ok := ff.headsSubs[id]
+	ff.mu.RUnlock()
+	if !ok {
+		return false
 	}
-	return false
+	// Drain the channel to avoid the deadlock in the OnNewEvent function
+	// Draining of the channel is safe without a lock because it does not panic
+	// when the channel is closed
+	for {
+		select {
+		case <-ch:
+		default:
+			ff.mu.Lock()
+			defer ff.mu.Unlock()
+			// Need to re-check the channel because it might have been closed and removed from the map
+			// which we were not holding the lock
+			if ch, ok = ff.headsSubs[id]; !ok {
+				return false
+			}
+			close(ch)
+			delete(ff.headsSubs, id)
+			ff.storeMu.Lock()
+			delete(ff.pendingHeadsStores, id)
+			ff.storeMu.Unlock()
+			return true
+		}
+	}
 }
 
 func (ff *Filters) SubscribePendingLogs(c chan types.Logs) PendingLogsSubID {
@@ -362,17 +379,34 @@ func (ff *Filters) SubscribePendingTxs(out chan []types.Transaction) PendingTxsS
 }
 
 func (ff *Filters) UnsubscribePendingTxs(id PendingTxsSubID) bool {
-	ff.mu.Lock()
-	defer ff.mu.Unlock()
-	if ch, ok := ff.pendingTxsSubs[id]; ok {
-		close(ch)
-		delete(ff.pendingTxsSubs, id)
-		ff.storeMu.Lock()
-		defer ff.storeMu.Unlock()
-		delete(ff.pendingTxsStores, id)
-		return true
+	ff.mu.RLock()
+	ch, ok := ff.pendingTxsSubs[id]
+	ff.mu.RUnlock()
+	if !ok {
+		return false
 	}
-	return false
+	// Drain the channel to avoid the deadlock in the OnNewTxs function
+	// Draining of the channel is safe without a lock because it does not panic
+	// when the channel is closed
+	for {
+		select {
+		case <-ch:
+		default:
+			ff.mu.Lock()
+			defer ff.mu.Unlock()
+			// Need to re-check the channel because it might have been closed and removed from the map
+			// which we were not holding the lock
+			if ch, ok = ff.pendingTxsSubs[id]; !ok {
+				return false
+			}
+			close(ch)
+			delete(ff.pendingTxsSubs, id)
+			ff.storeMu.Lock()
+			delete(ff.pendingTxsStores, id)
+			ff.storeMu.Unlock()
+			return true
+		}
+	}
 }
 
 func (ff *Filters) SubscribeLogs(out chan *types.Log, crit filters.FilterCriteria) LogsSubID {
@@ -397,9 +431,11 @@ func (ff *Filters) SubscribeLogs(out chan *types.Log, crit filters.FilterCriteri
 	}
 	f.topicsOriginal = crit.Topics
 	ff.logsSubs.addLogsFilters(f)
+	// if any filter in the aggregate needs all addresses or all topics then the global log subscription needs to
+	// allow all addresses or topics through
 	lfr := &remote.LogsFilterRequest{
-		AllAddresses: ff.logsSubs.aggLogsFilter.allAddrs == 1,
-		AllTopics:    ff.logsSubs.aggLogsFilter.allTopics == 1,
+		AllAddresses: ff.logsSubs.aggLogsFilter.allAddrs >= 1,
+		AllTopics:    ff.logsSubs.aggLogsFilter.allTopics >= 1,
 	}
 
 	addresses, topics := ff.logsSubs.getAggMaps()
@@ -430,9 +466,11 @@ func (ff *Filters) loadLogsRequester() any {
 
 func (ff *Filters) UnsubscribeLogs(id LogsSubID) bool {
 	isDeleted := ff.logsSubs.removeLogsFilter(id)
+	// if any filters in the aggregate need all addresses or all topics then the request to the central
+	// log subscription needs to honour this
 	lfr := &remote.LogsFilterRequest{
-		AllAddresses: ff.logsSubs.aggLogsFilter.allAddrs == 1,
-		AllTopics:    ff.logsSubs.aggLogsFilter.allTopics == 1,
+		AllAddresses: ff.logsSubs.aggLogsFilter.allAddrs >= 1,
+		AllTopics:    ff.logsSubs.aggLogsFilter.allTopics >= 1,
 	}
 
 	addresses, topics := ff.logsSubs.getAggMaps()
@@ -539,21 +577,6 @@ func (ff *Filters) OnNewTx(reply *txpool.OnAddReply) {
 }
 
 func (ff *Filters) OnNewLogs(reply *remote.SubscribeLogsReply) {
-	lg := &types.Log{
-		Address:     gointerfaces.ConvertH160toAddress(reply.Address),
-		Data:        reply.Data,
-		BlockNumber: reply.BlockNumber,
-		TxHash:      gointerfaces.ConvertH256ToHash(reply.TransactionHash),
-		TxIndex:     uint(reply.TransactionIndex),
-		BlockHash:   gointerfaces.ConvertH256ToHash(reply.BlockHash),
-		Index:       uint(reply.LogIndex),
-		Removed:     reply.Removed,
-	}
-	t := make([]common.Hash, 0)
-	for _, v := range reply.Topics {
-		t = append(t, gointerfaces.ConvertH256ToHash(v))
-	}
-	lg.Topics = t
 	ff.logsSubs.distributeLog(reply)
 }
 

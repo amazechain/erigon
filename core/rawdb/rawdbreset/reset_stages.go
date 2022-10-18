@@ -10,6 +10,9 @@ import (
 	"github.com/ledgerwatch/erigon/core/rawdb"
 	"github.com/ledgerwatch/erigon/eth/stagedsync"
 	"github.com/ledgerwatch/erigon/eth/stagedsync/stages"
+	"github.com/ledgerwatch/erigon/turbo/services"
+	"github.com/ledgerwatch/erigon/turbo/snapshotsync"
+	"github.com/ledgerwatch/log/v3"
 )
 
 func ResetState(db kv.RwDB, ctx context.Context, chain string) error {
@@ -42,7 +45,23 @@ func ResetState(db kv.RwDB, ctx context.Context, chain string) error {
 	return nil
 }
 
-func ResetBlocks(tx kv.RwTx) error {
+func ResetBlocks(tx kv.RwTx, db kv.RoDB, snapshots *snapshotsync.RoSnapshots, br services.HeaderAndCanonicalReader, tmpdir string) error {
+	go func() { //inverted read-ahead - to warmup data
+		_ = db.View(context.Background(), func(tx kv.Tx) error {
+			c, err := tx.Cursor(kv.EthTx)
+			if err != nil {
+				return err
+			}
+			defer c.Close()
+			for k, _, err := c.Last(); k != nil; k, _, err = c.Prev() {
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}()
+
 	// keep Genesis
 	if err := rawdb.TruncateBlocks(context.Background(), tx, 1); err != nil {
 		return err
@@ -52,6 +71,9 @@ func ResetBlocks(tx kv.RwTx) error {
 	}
 	if err := stages.SaveStageProgress(tx, stages.Headers, 1); err != nil {
 		return fmt.Errorf("saving Bodies progress failed: %w", err)
+	}
+	if err := stages.SaveStageProgress(tx, stages.Snapshots, 0); err != nil {
+		return fmt.Errorf("saving Snapshots progress failed: %w", err)
 	}
 
 	// remove all canonical markers from this point
@@ -79,11 +101,24 @@ func ResetBlocks(tx kv.RwTx) error {
 	if err := tx.ClearBucket(kv.EthTx); err != nil {
 		return err
 	}
+	if err := tx.ClearBucket(kv.MaxTxNum); err != nil {
+		return err
+	}
 	if err := rawdb.ResetSequence(tx, kv.EthTx, 0); err != nil {
 		return err
 	}
 	if err := rawdb.ResetSequence(tx, kv.NonCanonicalTxs, 0); err != nil {
 		return err
+	}
+
+	if snapshots != nil && snapshots.Cfg().Enabled && snapshots.BlocksAvailable() > 0 {
+		if err := stagedsync.FillDBFromSnapshots("fillind_db_from_snapshots", context.Background(), tx, tmpdir, snapshots, br); err != nil {
+			return err
+		}
+		_ = stages.SaveStageProgress(tx, stages.Snapshots, snapshots.BlocksAvailable())
+		_ = stages.SaveStageProgress(tx, stages.Headers, snapshots.BlocksAvailable())
+		_ = stages.SaveStageProgress(tx, stages.Bodies, snapshots.BlocksAvailable())
+		_ = stages.SaveStageProgress(tx, stages.Senders, snapshots.BlocksAvailable())
 	}
 
 	return nil
@@ -127,16 +162,17 @@ func ResetExec(tx kv.RwTx, chain string) (err error) {
 		kv.Code, kv.PlainContractCode, kv.ContractCode, kv.IncarnationMap,
 	}
 	for _, b := range stateBuckets {
+		log.Info("Clear", "table", b)
 		if err := tx.ClearBucket(b); err != nil {
 			return err
 		}
 	}
 
-	historyV2, err := rawdb.HistoryV2.Enabled(tx)
+	historyV3, err := rawdb.HistoryV3.Enabled(tx)
 	if err != nil {
 		return err
 	}
-	if historyV2 {
+	if historyV3 {
 		buckets := []string{
 			kv.AccountHistoryKeys, kv.AccountIdx, kv.AccountHistoryVals, kv.AccountSettings,
 			kv.StorageKeys, kv.StorageVals, kv.StorageHistoryKeys, kv.StorageHistoryVals, kv.StorageSettings, kv.StorageIdx,
@@ -150,6 +186,7 @@ func ResetExec(tx kv.RwTx, chain string) (err error) {
 			kv.TracesToKeys, kv.TracesToIdx,
 		}
 		for _, b := range buckets {
+			log.Info("Clear", "table", b)
 			if err := tx.ClearBucket(b); err != nil {
 				return err
 			}

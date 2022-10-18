@@ -492,8 +492,8 @@ func TestChainTxReorgs(t *testing.T) {
 		if txn, _, _, _, _ := rawdb.ReadTransactionByHash(tx, txn.Hash()); txn == nil {
 			t.Errorf("add %d: expected tx to be found", i)
 		}
-		if m.HistoryV2 {
-			// m.HistoryV2 doesn't store
+		if m.HistoryV3 {
+			// m.HistoryV3 doesn't store
 		} else {
 			if rcpt, _, _, _, _ := rawdb.ReadReceipt(tx, txn.Hash()); rcpt == nil {
 				t.Errorf("add %d: expected receipt to be found", i)
@@ -506,8 +506,8 @@ func TestChainTxReorgs(t *testing.T) {
 		if txn, _, _, _, _ := rawdb.ReadTransactionByHash(tx, txn.Hash()); txn == nil {
 			t.Errorf("share %d: expected tx to be found", i)
 		}
-		if m.HistoryV2 {
-			// m.HistoryV2 doesn't store
+		if m.HistoryV3 {
+			// m.HistoryV3 doesn't store
 		} else {
 			if rcpt, _, _, _, _ := rawdb.ReadReceipt(tx, txn.Hash()); rcpt == nil {
 				t.Errorf("share %d: expected receipt to be found", i)
@@ -761,8 +761,8 @@ func doModesTest(t *testing.T, pm prune.Mode) error {
 		})
 		require.NoError(err)
 		require.GreaterOrEqual(receiptsAvailable, pm.Receipts.PruneTo(head))
-		if m.HistoryV2 {
-			// receipts are not stored in erigon22
+		if m.HistoryV3 {
+			// receipts are not stored in erigon3
 		} else {
 			require.Greater(found, uint64(0))
 		}
@@ -1407,6 +1407,95 @@ func TestDeleteRecreateSlots(t *testing.T) {
 		statedb.GetState(aa, &key4, &got)
 		if got.Uint64() != 4 {
 			t.Errorf("got %d exp %d", got.Uint64(), 4)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestCVE2020_26265(t *testing.T) {
+	var (
+		// Generate a canonical chain to act as the main dataset
+		// A sender who makes transactions, has some funds
+		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		address = crypto.PubkeyToAddress(key.PublicKey)
+		funds   = big.NewInt(1000000000)
+
+		aa        = common.HexToAddress("0x000000000000000000000000000000000000aaaa")
+		aaStorage = make(map[common.Hash]common.Hash)               // Initial storage in AA
+		aaCode    = []byte{byte(vm.ADDRESS), byte(vm.SELFDESTRUCT)} // Code for AA (selfdestruct to itself)
+
+		caller        = common.HexToAddress("0x000000000000000000000000000000000000bbbb")
+		callerStorage = make(map[common.Hash]common.Hash) // Initial storage in CALLER
+		callerCode    = []byte{
+			byte(vm.PC),          // [0]
+			byte(vm.DUP1),        // [0,0]
+			byte(vm.DUP1),        // [0,0,0]
+			byte(vm.DUP1),        // [0,0,0,0]
+			byte(vm.PUSH1), 0x00, // [0,0,0,0,1] (value)
+			byte(vm.PUSH2), 0xaa, 0xaa, // [0,0,0,0,1, 0xaaaa]
+			byte(vm.GAS),
+			byte(vm.CALL), // Cause self-destruct of aa
+
+			byte(vm.PC),          // [0]
+			byte(vm.DUP1),        // [0,0]
+			byte(vm.DUP1),        // [0,0,0]
+			byte(vm.DUP1),        // [0,0,0,0]
+			byte(vm.PUSH1), 0x01, // [0,0,0,0,1] (value)
+			byte(vm.PUSH2), 0xaa, 0xaa, // [0,0,0,0,1, 0xaaaa]
+			byte(vm.GAS),
+			byte(vm.CALL), // Send 1 wei to add
+
+			byte(vm.RETURN),
+		} // Code for CALLER
+	)
+	gspec := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: core.GenesisAlloc{
+			address: {Balance: funds},
+			// The address 0xAAAAA selfdestructs if called
+			aa: {
+				// Code needs to just selfdestruct
+				Code:    aaCode,
+				Nonce:   1,
+				Balance: big.NewInt(3),
+				Storage: aaStorage,
+			},
+			caller: {
+				// Code needs to just selfdestruct
+				Code:    callerCode,
+				Nonce:   1,
+				Balance: big.NewInt(10),
+				Storage: callerStorage,
+			},
+		},
+	}
+	m := stages.MockWithGenesis(t, gspec, key, false)
+
+	chain, err := core.GenerateChain(m.ChainConfig, m.Genesis, m.Engine, m.DB, 1, func(i int, b *core.BlockGen) {
+		b.SetCoinbase(common.Address{1})
+		// One transaction to AA, to kill it
+		tx, _ := types.SignTx(types.NewTransaction(0, caller,
+			u256.Num0, 100000, u256.Num1, nil), *types.LatestSignerForChainID(nil), key)
+		b.AddTx(tx)
+		// One transaction to AA, to recreate it (but without storage
+		tx, _ = types.SignTx(types.NewTransaction(1, aa,
+			new(uint256.Int).SetUint64(5), 100000, u256.Num1, nil), *types.LatestSignerForChainID(nil), key)
+		b.AddTx(tx)
+	}, false /* intermediateHashes */)
+	if err != nil {
+		t.Fatalf("generate blocks: %v", err)
+	}
+	// Import the canonical chain
+	if err := m.InsertChain(chain); err != nil {
+		t.Fatalf("failed to insert into chain: %v", err)
+	}
+	err = m.DB.View(context.Background(), func(tx kv.Tx) error {
+		statedb := state.New(state.NewPlainState(tx, 2))
+
+		got := statedb.GetBalance(aa)
+		if !got.Eq(new(uint256.Int).SetUint64(5)) {
+			t.Errorf("got %x exp %x", got, 5)
 		}
 		return nil
 	})

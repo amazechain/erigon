@@ -12,16 +12,17 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/ledgerwatch/log/v3"
+	"github.com/pelletier/go-toml"
+	"github.com/urfave/cli"
+	"gopkg.in/yaml.v2"
+
 	"github.com/ledgerwatch/erigon-lib/common/dbg"
 	"github.com/ledgerwatch/erigon/cmd/utils"
 	"github.com/ledgerwatch/erigon/params"
 	erigonapp "github.com/ledgerwatch/erigon/turbo/app"
 	erigoncli "github.com/ledgerwatch/erigon/turbo/cli"
 	"github.com/ledgerwatch/erigon/turbo/node"
-	"github.com/ledgerwatch/log/v3"
-	"github.com/pelletier/go-toml"
-	"github.com/urfave/cli"
-	"gopkg.in/yaml.v2"
 )
 
 func main() {
@@ -126,16 +127,17 @@ func setFlagsFromConfigFile(ctx *cli.Context, filePath string) error {
 				sliceInterface := value.([]interface{})
 				s := make([]string, len(sliceInterface))
 				for i, v := range sliceInterface {
-					s[i] = v.(string)
+					s[i] = fmt.Sprintf("%v", v)
 				}
 				err := ctx.GlobalSet(key, strings.Join(s, ","))
 				if err != nil {
-					return err
+					return fmt.Errorf("failed setting %s flag with values=%s error=%s", key, s, err)
 				}
 			} else {
-				err := ctx.GlobalSet(key, value.(string))
+				err := ctx.GlobalSet(key, fmt.Sprintf("%v", value))
 				if err != nil {
-					return err
+					return fmt.Errorf("failed setting %s flag with value=%v error=%s", key, value, err)
+
 				}
 			}
 		}

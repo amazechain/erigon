@@ -6,6 +6,7 @@ import (
 	"github.com/ledgerwatch/erigon-lib/kv"
 	libstate "github.com/ledgerwatch/erigon-lib/state"
 	"github.com/ledgerwatch/erigon/common"
+	"github.com/ledgerwatch/erigon/common/dbutils"
 	"github.com/ledgerwatch/erigon/core/types/accounts"
 )
 
@@ -30,29 +31,6 @@ func (hr *HistoryReader22) ReadAccountData(address common.Address) (*accounts.Ac
 	if err != nil {
 		return nil, err
 	}
-	/*
-		if !ok {
-			enc, err = hr.tx.GetOne(kv.PlainState, address.Bytes())
-			if err != nil {
-				return nil, err
-			}
-		}
-		if len(enc) == 0 {
-			if hr.trace {
-				fmt.Printf("ReadAccountData [%x] => []\n", address)
-			}
-			return nil, nil
-		}
-		var a accounts.Account
-		if err := accounts.Deserialise2(&a, enc); err != nil {
-			return nil, fmt.Errorf("ReadAccountData(%x): %w", address, err)
-		}
-
-		if hr.trace {
-			fmt.Printf("ReadAccountData [%x] => [nonce: %d, balance: %d, codeHash: %x]\n", address, a.Nonce, &a.Balance, a.CodeHash)
-		}
-		return &a, nil
-	*/
 	if ok {
 		if len(enc) == 0 {
 			if hr.trace {
@@ -64,7 +42,6 @@ func (hr *HistoryReader22) ReadAccountData(address common.Address) (*accounts.Ac
 		if err := accounts.Deserialise2(&a, enc); err != nil {
 			return nil, fmt.Errorf("ReadAccountData(%x): %w", address, err)
 		}
-		fmt.Printf("aa2 1: %d, %x, %d\n", hr.txNum, address.Bytes(), a.Balance.Uint64())
 		if hr.trace {
 			fmt.Printf("ReadAccountData [%x] => [nonce: %d, balance: %d, codeHash: %x]\n", address, a.Nonce, &a.Balance, a.CodeHash)
 		}
@@ -84,7 +61,6 @@ func (hr *HistoryReader22) ReadAccountData(address common.Address) (*accounts.Ac
 	if err := a.DecodeForStorage(enc); err != nil {
 		return nil, fmt.Errorf("ReadAccountData(%x): %w", address, err)
 	}
-	fmt.Printf("aa2 2: %d, %x, %d\n", hr.txNum, address.Bytes(), a.Balance.Uint64())
 
 	if hr.trace {
 		fmt.Printf("ReadAccountData [%x] => [nonce: %d, balance: %d, codeHash: %x]\n", address, a.Nonce, &a.Balance, a.CodeHash)
@@ -98,7 +74,7 @@ func (hr *HistoryReader22) ReadAccountStorage(address common.Address, incarnatio
 		return nil, err
 	}
 	if !ok {
-		k := append(address.Bytes(), key.Bytes()...)
+		k := dbutils.PlainGenerateCompositeStorageKey(address[:], incarnation, key.Bytes())
 		enc, err = hr.tx.GetOne(kv.PlainState, k)
 		if err != nil {
 			return nil, err
@@ -118,18 +94,21 @@ func (hr *HistoryReader22) ReadAccountStorage(address common.Address, incarnatio
 }
 
 func (hr *HistoryReader22) ReadAccountCode(address common.Address, incarnation uint64, codeHash common.Hash) ([]byte, error) {
+	if codeHash == emptyCodeHashH {
+		return nil, nil
+	}
 	enc, ok, err := hr.ac.ReadAccountCodeNoStateWithRecent(address.Bytes(), hr.txNum)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		enc, err = hr.tx.GetOne(kv.Code, address.Bytes())
+		enc, err = hr.tx.GetOne(kv.Code, codeHash[:])
 		if err != nil {
 			return nil, err
 		}
 	}
 	if hr.trace {
-		fmt.Printf("ReadAccountCode [%x] => [%x]\n", address, enc)
+		fmt.Printf("ReadAccountCode [%x %x] => [%x]\n", address, codeHash, enc)
 	}
 	return enc, nil
 }
@@ -140,7 +119,7 @@ func (hr *HistoryReader22) ReadAccountCodeSize(address common.Address, incarnati
 		return 0, err
 	}
 	if !ok {
-		enc, err := hr.tx.GetOne(kv.Code, address.Bytes())
+		enc, err := hr.tx.GetOne(kv.Code, codeHash[:])
 		if err != nil {
 			return 0, err
 		}

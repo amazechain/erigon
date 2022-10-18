@@ -39,7 +39,9 @@ import (
 	"github.com/ledgerwatch/erigon/params/networkname"
 )
 
-const HistoryV2AggregationStep = 3_125_000 /* number of transactions in smallest static file */
+// AggregationStep number of transactions in smallest static file
+const HistoryV3AggregationStep = 3_125_000 // 100M / 32
+//const HistoryV3AggregationStep = 3_125_000 / 32 // 100M / 32
 
 // FullNodeGPO contains default gasprice oracle settings for full node.
 var FullNodeGPO = gasprice.Config{
@@ -219,13 +221,11 @@ type Config struct {
 
 	StateStream bool
 
-	MemoryOverlay bool
-
 	// Enable WatchTheBurn stage
 	EnabledIssuance bool
 
 	//  New DB and Snapshots format of history allows: parallel blocks execution, get state as of given transaction without executing whole block.",
-	HistoryV2 bool
+	HistoryV3 bool
 
 	// URL to connect to Heimdall node
 	HeimdallURL string
@@ -234,6 +234,8 @@ type Config struct {
 	WithoutHeimdall bool
 	// Ethstats service
 	Ethstats string
+	// ConsenSUS layer
+	CL bool
 
 	// FORK_NEXT_VALUE (see EIP-3675) block override
 	OverrideMergeNetsplitBlock *big.Int `toml:",omitempty"`

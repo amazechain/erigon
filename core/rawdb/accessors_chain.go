@@ -24,8 +24,10 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 	"time"
 
+	"github.com/gballet/go-verkle"
 	common2 "github.com/ledgerwatch/erigon-lib/common"
 	libcommon "github.com/ledgerwatch/erigon-lib/common/cmp"
 	"github.com/ledgerwatch/erigon-lib/common/dbg"
@@ -712,7 +714,7 @@ func deleteBody(db kv.Deleter, hash common.Hash, number uint64) {
 }
 
 // MakeBodiesCanonical - move all txs of non-canonical blocks from NonCanonicalTxs table to EthTx table
-func MakeBodiesCanonical(tx kv.RwTx, from uint64, ctx context.Context, logPrefix string, logEvery *time.Ticker, cb func(blockNum, lastTxnNum uint64)) error {
+func MakeBodiesCanonical(tx kv.RwTx, from uint64, ctx context.Context, logPrefix string, logEvery *time.Ticker, cb func(blockNum, lastTxnNum uint64) error) error {
 	for blockNum := from; ; blockNum++ {
 		h, err := ReadCanonicalHash(tx, blockNum)
 		if err != nil {
@@ -757,7 +759,9 @@ func MakeBodiesCanonical(tx kv.RwTx, from uint64, ctx context.Context, logPrefix
 		}
 		if cb != nil {
 			lastTxnNum := bodyForStorage.BaseTxId + uint64(bodyForStorage.TxAmount)
-			cb(blockNum, lastTxnNum)
+			if err = cb(blockNum, lastTxnNum); err != nil {
+				return err
+			}
 		}
 
 		select {
@@ -1311,6 +1315,7 @@ func TruncateBlocks(ctx context.Context, tx kv.RwTx, blockFrom uint64) error {
 	if blockFrom < 1 { //protect genesis
 		blockFrom = 1
 	}
+	sequenceTo := map[string]uint64{}
 	for k, _, err := c.Last(); k != nil; k, _, err = c.Prev() {
 		if err != nil {
 			return err
@@ -1342,9 +1347,7 @@ func TruncateBlocks(ctx context.Context, tx kv.RwTx, blockFrom uint64) error {
 			}); err != nil {
 				return err
 			}
-			if err := ResetSequence(tx, bucket, b.BaseTxId); err != nil {
-				return err
-			}
+			sequenceTo[bucket] = b.BaseTxId
 		}
 		// Copying k because otherwise the same memory will be reused
 		// for the next key and Delete below will end up deleting 1 more record than required
@@ -1362,6 +1365,11 @@ func TruncateBlocks(ctx context.Context, tx kv.RwTx, blockFrom uint64) error {
 		case <-logEvery.C:
 			log.Info("TruncateBlocks", "block", n)
 		default:
+		}
+	}
+	for bucket, sequence := range sequenceTo {
+		if err := ResetSequence(tx, bucket, sequence); err != nil {
+			return err
 		}
 	}
 
@@ -1619,23 +1627,47 @@ func IsPosBlock(db kv.Getter, blockHash common.Hash) (trans bool, err error) {
 }
 
 var SnapshotsKey = []byte("snapshots")
+var SnapshotsHistoryKey = []byte("snapshots_history")
 
-func ReadSnapshots(tx kv.Tx) ([]string, error) {
+func ReadSnapshots(tx kv.Tx) ([]string, []string, error) {
 	v, err := tx.GetOne(kv.DatabaseInfo, SnapshotsKey)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var res []string
+	var res, resHist []string
 	_ = json.Unmarshal(v, &res)
-	return res, nil
+
+	v, err = tx.GetOne(kv.DatabaseInfo, SnapshotsHistoryKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	_ = json.Unmarshal(v, &resHist)
+	return res, resHist, nil
 }
 
-func WriteSnapshots(tx kv.RwTx, list []string) error {
+func WriteSnapshots(tx kv.RwTx, list, histList []string) error {
 	res, err := json.Marshal(list)
 	if err != nil {
 		return err
 	}
-	return tx.Put(kv.DatabaseInfo, SnapshotsKey, res)
+	if err := tx.Put(kv.DatabaseInfo, SnapshotsKey, res); err != nil {
+		return err
+	}
+	res, err = json.Marshal(histList)
+	if err != nil {
+		return err
+	}
+	if err := tx.Put(kv.DatabaseInfo, SnapshotsHistoryKey, res); err != nil {
+		return err
+	}
+	return nil
+}
+func WriteHistorySnapshots(tx kv.RwTx, list []string) error {
+	res, err := json.Marshal(list)
+	if err != nil {
+		return err
+	}
+	return tx.Put(kv.DatabaseInfo, SnapshotsHistoryKey, res)
 }
 
 // PruneTable has `limit` parameter to avoid too large data deletes per one sync cycle - better delete by small portions to reduce db.FreeList size
@@ -1700,4 +1732,145 @@ func PruneTableDupSort(tx kv.RwTx, table string, logPrefix string, pruneTo uint6
 		}
 	}
 	return nil
+}
+
+type txNums struct{}
+
+var TxNums txNums
+
+func (txNums) Max(tx kv.Getter, blockNum uint64) (maxTxNum uint64, err error) {
+	var k [8]byte
+	binary.BigEndian.PutUint64(k[:], blockNum)
+	v, err := tx.GetOne(kv.MaxTxNum, k[:])
+	if err != nil {
+		return 0, err
+	}
+	if len(v) == 0 {
+		return 0, nil
+	}
+	return binary.BigEndian.Uint64(v), nil
+}
+func (txNums) Min(tx kv.Getter, blockNum uint64) (maxTxNum uint64, err error) {
+	if blockNum == 0 {
+		return 0, nil
+	}
+	var k [8]byte
+	binary.BigEndian.PutUint64(k[:], blockNum-1)
+	v, err := tx.GetOne(kv.MaxTxNum, k[:])
+	if err != nil {
+		return 0, err
+	}
+	if len(v) == 0 {
+		return 0, nil
+	}
+	return binary.BigEndian.Uint64(v) + 1, nil
+}
+
+func (txNums) Append(tx kv.RwTx, blockNum, maxTxNum uint64) (err error) {
+	lastK, err := LastKey(tx, kv.MaxTxNum)
+	if err != nil {
+		return err
+	}
+	if len(lastK) != 0 {
+		lastBlockNum := binary.BigEndian.Uint64(lastK)
+		if lastBlockNum+1 != blockNum {
+			return fmt.Errorf("append with gap blockNum=%d, but current heigh=%d", blockNum, lastBlockNum)
+		}
+	}
+
+	var k, v [8]byte
+	binary.BigEndian.PutUint64(k[:], blockNum)
+	binary.BigEndian.PutUint64(v[:], maxTxNum)
+	if err := tx.Append(kv.MaxTxNum, k[:], v[:]); err != nil {
+		return err
+	}
+	return nil
+}
+func (txNums) WriteForGenesis(tx kv.RwTx, maxTxNum uint64) (err error) {
+	var k, v [8]byte
+	binary.BigEndian.PutUint64(k[:], 0)
+	binary.BigEndian.PutUint64(v[:], maxTxNum)
+	return tx.Put(kv.MaxTxNum, k[:], v[:])
+}
+func (txNums) Truncate(tx kv.RwTx, blockNum uint64) (err error) {
+	var seek [8]byte
+	binary.BigEndian.PutUint64(seek[:], blockNum)
+	c, err := tx.RwCursor(kv.MaxTxNum)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	for k, _, err := c.Seek(seek[:]); k != nil; k, _, err = c.Next() {
+		if err != nil {
+			return err
+		}
+		if err = c.DeleteCurrent(); err != nil {
+			return err
+		}
+
+	}
+	return nil
+}
+func (txNums) FindBlockNum(tx kv.Tx, endTxNumMinimax uint64) (ok bool, blockNum uint64, err error) {
+	var seek [8]byte
+	c, err := tx.Cursor(kv.MaxTxNum)
+	if err != nil {
+		return false, 0, err
+	}
+	defer c.Close()
+
+	cnt, err := c.Count()
+	if err != nil {
+		return false, 0, err
+	}
+
+	blockNum = uint64(sort.Search(int(cnt), func(i int) bool {
+		binary.BigEndian.PutUint64(seek[:], uint64(i))
+		var v []byte
+		_, v, err = c.SeekExact(seek[:])
+		return binary.BigEndian.Uint64(v) >= endTxNumMinimax
+	}))
+	if err != nil {
+		return false, 0, err
+	}
+	if blockNum == cnt {
+		return false, 0, nil
+	}
+	return true, blockNum, nil
+}
+
+func ReadVerkleRoot(tx kv.Tx, blockNum uint64) (common.Hash, error) {
+	root, err := tx.GetOne(kv.VerkleRoots, dbutils.EncodeBlockNumber(blockNum))
+	if err != nil {
+		return common.Hash{}, err
+	}
+
+	return common.BytesToHash(root), nil
+}
+
+func WriteVerkleRoot(tx kv.RwTx, blockNum uint64, root common.Hash) error {
+	return tx.Put(kv.VerkleRoots, dbutils.EncodeBlockNumber(blockNum), root[:])
+}
+
+func WriteVerkleNode(tx kv.RwTx, node verkle.VerkleNode) error {
+	var (
+		root    common.Hash
+		encoded []byte
+		err     error
+	)
+	root = node.ComputeCommitment().Bytes()
+	encoded, err = node.Serialize()
+	if err != nil {
+		return err
+	}
+
+	return tx.Put(kv.VerkleTrie, root[:], encoded)
+}
+
+func ReadVerkleNode(tx kv.RwTx, root common.Hash) (verkle.VerkleNode, error) {
+	encoded, err := tx.GetOne(kv.VerkleTrie, root[:])
+	if err != nil {
+		return nil, err
+	}
+	return verkle.ParseNode(encoded, 0, root[:])
 }

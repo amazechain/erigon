@@ -236,6 +236,7 @@ The following table shows the current implementation status of Erigon's RPC daem
 | eth_getTransactionCount                    | Yes     |                                      |
 | eth_getStorageAt                           | Yes     |                                      |
 | eth_call                                   | Yes     |                                      |
+| eth_callMany                               | Yes     | Erigon Method PR#4567                |
 | eth_callBundle                             | Yes     |                                      |
 | eth_createAccessList                       | Yes     |                                      |
 |                                            |         |                                      |
@@ -281,6 +282,7 @@ The following table shows the current implementation status of Erigon's RPC daem
 | debug_traceBlockByNumber                   | Yes     | Streaming (can handle huge results)  |
 | debug_traceTransaction                     | Yes     | Streaming (can handle huge results)  |
 | debug_traceCall                            | Yes     | Streaming (can handle huge results)  |
+| debug_traceCallMany                        | Yes     | Erigon Method PR#4567.               |
 |                                            |         |                                      |
 | trace_call                                 | Yes     |                                      |
 | trace_callMany                             | Yes     |                                      |
@@ -311,6 +313,7 @@ The following table shows the current implementation status of Erigon's RPC daem
 | erigon_forks                               | Yes     | Erigon only                          |
 | erigon_issuance                            | Yes     | Erigon only                          |
 | erigon_GetBlockByTimestamp                 | Yes     | Erigon only                          |
+| erigon_BlockNumber                         | Yes     | Erigon only                          |
 |                                            |         |                                      |
 | bor_getSnapshot                            | Yes     | Bor only                             |
 | bor_getAuthor                              | Yes     | Bor only                             |

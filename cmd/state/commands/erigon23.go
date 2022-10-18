@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,17 +15,15 @@ import (
 	"time"
 
 	"github.com/holiman/uint256"
-	libcommon "github.com/ledgerwatch/erigon-lib/common"
-	"github.com/ledgerwatch/erigon-lib/kv"
-	"github.com/ledgerwatch/erigon-lib/kv/mdbx"
-	kv2 "github.com/ledgerwatch/erigon-lib/kv/mdbx"
-	libstate "github.com/ledgerwatch/erigon-lib/state"
-	"github.com/ledgerwatch/erigon/cmd/state/exec22"
-	"github.com/ledgerwatch/erigon/eth/stagedsync"
-	"github.com/ledgerwatch/erigon/turbo/services"
-	"github.com/ledgerwatch/log/v3"
 	"github.com/spf13/cobra"
 
+	libcommon "github.com/ledgerwatch/erigon-lib/common"
+	"github.com/ledgerwatch/erigon-lib/kv"
+	kv2 "github.com/ledgerwatch/erigon-lib/kv/mdbx"
+	libstate "github.com/ledgerwatch/erigon-lib/state"
+	"github.com/ledgerwatch/log/v3"
+
+	"github.com/ledgerwatch/erigon/cmd/state/exec3"
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/consensus"
 	"github.com/ledgerwatch/erigon/consensus/misc"
@@ -35,6 +34,7 @@ import (
 	"github.com/ledgerwatch/erigon/core/vm"
 	"github.com/ledgerwatch/erigon/eth/ethconfig"
 	"github.com/ledgerwatch/erigon/params"
+	"github.com/ledgerwatch/erigon/turbo/services"
 	"github.com/ledgerwatch/erigon/turbo/snapshotsync"
 )
 
@@ -42,17 +42,45 @@ func init() {
 	withBlock(erigon23Cmd)
 	withDataDir(erigon23Cmd)
 	withChain(erigon23Cmd)
+	withLogPath(erigon23Cmd)
 
+	erigon23Cmd.Flags().IntVar(&commitmentFrequency, "commfreq", 25000, "how many blocks to skip between calculating commitment")
+	erigon23Cmd.Flags().BoolVar(&commitments, "commitments", false, "set to true to calculate commitments")
+	erigon23Cmd.Flags().StringVar(&commitmentsMode, "commitments.mode", "direct", "defines the way to calculate commitments: 'direct' mode reads from state directly, 'update' accumulate updates before commitment")
 	rootCmd.AddCommand(erigon23Cmd)
 }
 
+var (
+	commitmentsMode string // flag --commitments.mode [direct|update]
+)
+
 var erigon23Cmd = &cobra.Command{
 	Use:   "erigon23",
-	Short: "Exerimental command to re-execute blocks from beginning using erigon2 state representation and histoty (ugrade 3)",
+	Short: "Experimental command to re-execute blocks from beginning using erigon2 state representation and histoty (ugrade 3)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		logger := log.New()
+		logger, err := initSeparatedLogging(logdir, "erigon23")
+		if err != nil {
+			return err
+		}
 		return Erigon23(genesis, chainConfig, logger)
 	},
+}
+
+func initSeparatedLogging(logPath string, filePrefix string) (log.Logger, error) {
+	err := os.MkdirAll(logPath, 0764)
+	if err != nil {
+		return nil, err
+	}
+
+	logger := log.New()
+	errLog, err := log.FileHandler(path.Join(logPath, filePrefix+"-error.log"), log.LogfmtFormat(), 1<<27) // 128Mb
+	if err != nil {
+		return nil, err
+	}
+
+	fh := log.LvlFilterHandler(log.LvlTrace, errLog)
+	logger.SetHandler(log.MultiHandler(log.Root().GetHandler(), fh))
+	return logger, nil
 }
 
 func Erigon23(genesis *core.Genesis, chainConfig *params.ChainConfig, logger log.Logger) error {
@@ -103,17 +131,36 @@ func Erigon23(genesis *core.Genesis, chainConfig *params.ChainConfig, logger log
 		return err
 	}
 
-	agg, err3 := libstate.NewAggregator(aggPath, stagedsync.AggregationStep)
+	agg, err3 := libstate.NewAggregator(aggPath, ethconfig.HistoryV3AggregationStep)
 	if err3 != nil {
 		return fmt.Errorf("create aggregator: %w", err3)
 	}
 	defer agg.Close()
+
+	var mode libstate.CommitmentMode
+	switch commitmentsMode {
+	case "update":
+		mode = libstate.CommitmentModeUpdates
+	default:
+		mode = libstate.CommitmentModeDirect
+	}
+	agg.SetCommitmentMode(mode)
+
 	startTxNum := agg.EndTxNumMinimax()
 	fmt.Printf("Max txNum in files: %d\n", startTxNum)
 
+	agg.SetTx(rwTx)
+	defer agg.StartWrites().FinishWrites()
+
+	latestTx, err := agg.SeekCommitment()
+	if err != nil && startTxNum != 0 {
+		return fmt.Errorf("failed to seek commitment to tx %d: %w", startTxNum, err)
+	}
+	startTxNum = latestTx
+
 	interrupt := false
 	if startTxNum == 0 {
-		_, genesisIbs, err := genesis.ToBlock()
+		genBlock, genesisIbs, err := genesis.ToBlock()
 		if err != nil {
 			return err
 		}
@@ -122,12 +169,22 @@ func Erigon23(genesis *core.Genesis, chainConfig *params.ChainConfig, logger log
 		if err = genesisIbs.CommitBlock(&params.Rules{}, &WriterWrapper23{w: agg}); err != nil {
 			return fmt.Errorf("cannot write state: %w", err)
 		}
+
+		blockRootHash, err := agg.ComputeCommitment(true, false)
+		if err != nil {
+			return err
+		}
 		if err = agg.FinishTx(); err != nil {
 			return err
 		}
+
+		genesisRootHash := genBlock.Root()
+		if !bytes.Equal(blockRootHash, genesisRootHash[:]) {
+			return fmt.Errorf("genesis root hash mismatch: expected %x got %x", genesisRootHash, blockRootHash)
+		}
 	}
 
-	logger.Info("Initialised chain configuration", "config", chainConfig)
+	logger.Info("Initialised chain configuration", "startTxNum", startTxNum, "config", chainConfig)
 
 	var (
 		blockNum uint64
@@ -148,7 +205,7 @@ func Erigon23(genesis *core.Genesis, chainConfig *params.ChainConfig, logger log
 	go func() {
 		for range logEvery.C {
 			aStats := agg.Stats()
-			statx.delta(aStats, blockNum).print(aStats, logger)
+			statx.delta(aStats, blockNum, txNum).print(aStats, logger)
 		}
 	}()
 
@@ -170,6 +227,38 @@ func Erigon23(genesis *core.Genesis, chainConfig *params.ChainConfig, logger log
 	}
 	readWrapper := &ReaderWrapper23{ac: agg.MakeContext(), roTx: rwTx}
 	writeWrapper := &WriterWrapper23{w: agg}
+
+	commitFn := func(txn uint64) error {
+		if db == nil || rwTx == nil {
+			return fmt.Errorf("commit failed due to invalid db/rwTx")
+		}
+		var spaceDirty uint64
+		if spaceDirty, _, err = rwTx.(*kv2.MdbxTx).SpaceDirty(); err != nil {
+			return fmt.Errorf("retrieving spaceDirty: %w", err)
+		}
+		if spaceDirty >= dirtySpaceThreshold {
+			log.Info("Initiated tx commit", "block", blockNum, "space dirty", libcommon.ByteCount(spaceDirty))
+		}
+		log.Info("database commitment", "block", blockNum, "txNum", txn)
+		if err := agg.Flush(); err != nil {
+			return err
+		}
+		if err = rwTx.Commit(); err != nil {
+			return err
+		}
+		if interrupt {
+			return nil
+		}
+
+		if rwTx, err = db.BeginRw(ctx); err != nil {
+			return err
+		}
+		agg.SetTx(rwTx)
+		readWrapper.roTx = rwTx
+		return nil
+	}
+
+	agg.SetCommitFn(commitFn)
 
 	for !interrupt {
 		blockNum++
@@ -197,32 +286,12 @@ func Erigon23(genesis *core.Genesis, chainConfig *params.ChainConfig, logger log
 		// Check for interrupts
 		select {
 		case interrupt = <-interruptCh:
+			// Commit transaction only when interrupted or just before computing commitment (so it can be re-done)
 			log.Info(fmt.Sprintf("interrupted, please wait for cleanup, next time start with --block %d", blockNum))
+			if err := commitFn(txNum); err != nil {
+				log.Error("db commit", "err", err)
+			}
 		default:
-		}
-		// Commit transaction only when interrupted or just before computing commitment (so it can be re-done)
-		commit := interrupt
-		if !commit && (blockNum+1)%uint64(commitmentFrequency) == 0 {
-			var spaceDirty uint64
-			if spaceDirty, _, err = rwTx.(*mdbx.MdbxTx).SpaceDirty(); err != nil {
-				return fmt.Errorf("retrieving spaceDirty: %w", err)
-			}
-			if spaceDirty >= dirtySpaceThreshold {
-				log.Info("Initiated tx commit", "block", blockNum, "space dirty", libcommon.ByteCount(spaceDirty))
-				commit = true
-			}
-		}
-		if commit {
-			if err = rwTx.Commit(); err != nil {
-				return err
-			}
-			if !interrupt {
-				if rwTx, err = db.BeginRw(ctx); err != nil {
-					return err
-				}
-			}
-			agg.SetTx(rwTx)
-			readWrapper.roTx = rwTx
 		}
 	}
 
@@ -235,31 +304,37 @@ type stat23 struct {
 	misses       uint64
 	prevBlock    uint64
 	hitMissRatio float64
-	speed        float64
+	blockSpeed   float64
+	txSpeed      float64
+	txNum        uint64
+	prevTxNum    uint64
 	prevTime     time.Time
 	mem          runtime.MemStats
 }
 
 func (s *stat23) print(aStats libstate.FilesStats, logger log.Logger) {
-	totalFiles := 0
-	totalDatSize := 0
-	totalIdxSize := 0
+	totalFiles := aStats.FilesCount
+	totalDatSize := aStats.DataSize
+	totalIdxSize := aStats.IdxSize
 
-	logger.Info("Progress", "block", s.blockNum, "blk/s", s.speed, "state files", totalFiles,
-		"total dat", libcommon.ByteCount(uint64(totalDatSize)), "total idx", libcommon.ByteCount(uint64(totalIdxSize)),
+	logger.Info("Progress", "block", s.blockNum, "blk/s", s.blockSpeed, "tx", s.txNum, "txn/s", s.txSpeed, "state files", totalFiles,
+		"total dat", libcommon.ByteCount(totalDatSize), "total idx", libcommon.ByteCount(totalIdxSize),
 		"hit ratio", s.hitMissRatio, "hits+misses", s.hits+s.misses,
 		"alloc", libcommon.ByteCount(s.mem.Alloc), "sys", libcommon.ByteCount(s.mem.Sys),
 	)
 }
 
-func (s *stat23) delta(aStats libstate.FilesStats, blockNum uint64) *stat23 {
+func (s *stat23) delta(aStats libstate.FilesStats, blockNum, txNum uint64) *stat23 {
 	currentTime := time.Now()
 	libcommon.ReadMemStats(&s.mem)
 
 	interval := currentTime.Sub(s.prevTime).Seconds()
 	s.blockNum = blockNum
-	s.speed = float64(s.blockNum-s.prevBlock) / interval
+	s.blockSpeed = float64(s.blockNum-s.prevBlock) / interval
+	s.txNum = txNum
+	s.txSpeed = float64(s.txNum-s.prevTxNum) / interval
 	s.prevBlock = blockNum
+	s.prevTxNum = txNum
 	s.prevTime = currentTime
 
 	total := s.hits + s.misses
@@ -282,6 +357,7 @@ func processBlock23(startTxNum uint64, trace bool, txNumStart uint64, rw *Reader
 	rules := chainConfig.Rules(block.NumberU64())
 	txNum := txNumStart
 	ww.w.SetTxNum(txNum)
+	ww.w.SetBlockNum(block.NumberU64())
 	rw.blockNum = block.NumberU64()
 	ww.blockNum = block.NumberU64()
 
@@ -300,13 +376,17 @@ func processBlock23(startTxNum uint64, trace bool, txNumStart uint64, rw *Reader
 
 	txNum++ // Pre-block transaction
 	ww.w.SetTxNum(txNum)
+	if err := ww.w.FinishTx(); err != nil {
+		return 0, nil, fmt.Errorf("finish pre-block tx %d (block %d) has failed: %w", txNum, block.NumberU64(), err)
+	}
+
 	getHashFn := core.GetHashFn(header, getHeader)
 
 	for i, tx := range block.Transactions() {
 		if txNum >= startTxNum {
 			ibs := state.New(rw)
 			ibs.Prepare(tx.Hash(), block.Hash(), i)
-			ct := exec22.NewCallTracer()
+			ct := exec3.NewCallTracer()
 			vmConfig.Tracer = ct
 			receipt, _, err := core.ApplyTransaction(chainConfig, getHashFn, engine, nil, gp, ibs, ww, header, tx, usedGas, vmConfig)
 			if err != nil {
@@ -344,17 +424,16 @@ func processBlock23(startTxNum uint64, trace bool, txNumStart uint64, rw *Reader
 		ww.w.SetTxNum(txNum)
 	}
 
-	if txNum >= startTxNum && chainConfig.IsByzantium(block.NumberU64()) {
-		receiptSha := types.DeriveSha(receipts)
-		if receiptSha != block.ReceiptHash() {
-			fmt.Printf("mismatched receipt headers for block %d\n", block.NumberU64())
-			for j, receipt := range receipts {
-				fmt.Printf("tx %d, used gas: %d\n", j, receipt.GasUsed)
+	if txNum >= startTxNum {
+		if chainConfig.IsByzantium(block.NumberU64()) {
+			receiptSha := types.DeriveSha(receipts)
+			if receiptSha != block.ReceiptHash() {
+				fmt.Printf("mismatched receipt headers for block %d\n", block.NumberU64())
+				for j, receipt := range receipts {
+					fmt.Printf("tx %d, used gas: %d\n", j, receipt.GasUsed)
+				}
 			}
 		}
-	}
-
-	if txNum >= startTxNum {
 		ibs := state.New(rw)
 		if err := ww.w.AddTraceTo(block.Coinbase().Bytes()); err != nil {
 			return 0, nil, fmt.Errorf("adding coinbase trace: %w", err)
@@ -384,6 +463,19 @@ func processBlock23(startTxNum uint64, trace bool, txNumStart uint64, rw *Reader
 
 	txNum++ // Post-block transaction
 	ww.w.SetTxNum(txNum)
+	if commitments && block.Number().Uint64()%uint64(commitmentFrequency) == 0 {
+		rootHash, err := ww.w.ComputeCommitment(true, trace)
+		if err != nil {
+			return 0, nil, err
+		}
+		if !bytes.Equal(rootHash, header.Root[:]) {
+			return 0, nil, fmt.Errorf("invalid root hash for block %d: expected %x got %x", block.NumberU64(), header.Root, rootHash)
+		}
+	}
+
+	if err := ww.w.FinishTx(); err != nil {
+		return 0, nil, fmt.Errorf("finish after-block tx %d (block %d) has failed: %w", txNum, block.NumberU64(), err)
+	}
 
 	return txNum, receipts, nil
 }
@@ -408,7 +500,6 @@ func (rw *ReaderWrapper23) ReadAccountData(address common.Address) (*accounts.Ac
 	if len(enc) == 0 {
 		return nil, nil
 	}
-
 	var a accounts.Account
 	a.Reset()
 	pos := 0
@@ -484,6 +575,7 @@ func (ww *WriterWrapper23) UpdateAccountData(address common.Address, original, a
 	}
 	value := make([]byte, l)
 	pos := 0
+
 	if account.Nonce == 0 {
 		value[pos] = 0
 		pos++

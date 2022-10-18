@@ -334,25 +334,6 @@ func (back *BlockReaderWithSnapshots) Header(ctx context.Context, tx kv.Getter, 
 	return h, nil
 }
 
-func (back *BlockReaderWithSnapshots) ReadHeaderByNumber(ctx context.Context, tx kv.Getter, hash common.Hash, blockHeight uint64) (h *types.Header, err error) {
-	ok, err := back.sn.ViewHeaders(blockHeight, func(segment *HeaderSegment) error {
-		h, _, err = back.headerFromSnapshot(blockHeight, segment, nil)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return h, nil
-	}
-
-	h = rawdb.ReadHeader(tx, hash, blockHeight)
-	return h, nil
-}
-
 func (back *BlockReaderWithSnapshots) BodyWithTransactions(ctx context.Context, tx kv.Getter, hash common.Hash, blockHeight uint64) (body *types.Body, err error) {
 	var baseTxnID uint64
 	var txsAmount uint32
@@ -505,7 +486,7 @@ func (back *BlockReaderWithSnapshots) headerFromSnapshot(blockHeight uint64, sn 
 	gg := sn.seg.MakeGetter()
 	gg.Reset(headerOffset)
 	if !gg.HasNext() {
-		return nil, nil, nil
+		return nil, buf, nil
 	}
 	buf, _ = gg.Next(buf[:0])
 	if len(buf) == 0 {
@@ -585,11 +566,11 @@ func (back *BlockReaderWithSnapshots) bodyForStorageFromSnapshot(blockHeight uin
 	gg := sn.seg.MakeGetter()
 	gg.Reset(bodyOffset)
 	if !gg.HasNext() {
-		return nil, nil, nil
+		return nil, buf, nil
 	}
 	buf, _ = gg.Next(buf[:0])
 	if len(buf) == 0 {
-		return nil, nil, nil
+		return nil, buf, nil
 	}
 	b := &types.BodyForStorage{}
 	reader := bytes.NewReader(buf)
@@ -619,13 +600,13 @@ func (back *BlockReaderWithSnapshots) txsFromSnapshot(baseTxnID uint64, txsAmoun
 
 	txs = make([]types.Transaction, txsAmount)
 	senders = make([]common.Address, txsAmount)
-	reader := bytes.NewReader(buf)
 	if txsAmount == 0 {
 		return txs, senders, nil
 	}
 	txnOffset := txsSeg.IdxTxnHash.OrdinalLookup(baseTxnID - txsSeg.IdxTxnHash.BaseDataID())
 	gg := txsSeg.Seg.MakeGetter()
 	gg.Reset(txnOffset)
+	reader := bytes.NewReader(buf)
 	stream := rlp.NewStream(reader, 0)
 	for i := uint32(0); i < txsAmount; i++ {
 		if !gg.HasNext() {
@@ -705,6 +686,8 @@ func (back *BlockReaderWithSnapshots) txnByHash(txnHash common.Hash, segments []
 	return
 }
 
+// TxnByIdxInBlock - doesn't include system-transactions in the begin/end of block
+// return nil if 0 < i < body.TxAmoun
 func (back *BlockReaderWithSnapshots) TxnByIdxInBlock(ctx context.Context, tx kv.Getter, blockNum uint64, i int) (txn types.Transaction, err error) {
 	var b *types.BodyForStorage
 	ok, err := back.sn.ViewBodies(blockNum, func(segment *BodySegment) error {
@@ -715,10 +698,18 @@ func (back *BlockReaderWithSnapshots) TxnByIdxInBlock(ctx context.Context, tx kv
 		if b == nil {
 			return nil
 		}
-
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+
 	if ok {
+		// if block has no transactions, or requested txNum out of non-system transactions length
+		if b.TxAmount == 2 || i == -1 || i >= int(b.TxAmount-2) {
+			return nil, nil
+		}
+
 		ok, err = back.sn.Txs.ViewSegment(blockNum, func(segment *TxnSegment) error {
 			// +1 because block has system-txn in the beginning of block
 			txn, err = back.txnByID(b.BaseTxId+1+uint64(i), segment, nil)
