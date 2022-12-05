@@ -13,13 +13,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ledgerwatch/erigon-lib/common/length"
 	"github.com/ledgerwatch/erigon/core/rawdb"
 
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/holiman/uint256"
 	"github.com/ledgerwatch/erigon-lib/kv"
 	"github.com/ledgerwatch/log/v3"
-	"golang.org/x/crypto/sha3"
 	"golang.org/x/exp/slices"
 
 	"github.com/ledgerwatch/erigon/accounts/abi"
@@ -53,7 +53,7 @@ const (
 	extraSeal        = 65 // Fixed number of extra-data suffix bytes reserved for signer seal
 	nextForkHashSize = 4  // Fixed number of extra-data suffix bytes reserved for nextForkHash.
 
-	validatorBytesLength = common.AddressLength
+	validatorBytesLength = length.Addr
 	wiggleTime           = uint64(1) // second, Random delay (per signer) to allow concurrent signers
 	initialBackOffTime   = uint64(1) // second
 	processBackOffTime   = uint64(1) // second
@@ -173,7 +173,9 @@ func ecrecover(header *types.Header, sigCache *lru.ARCCache, chainId *big.Int) (
 
 // SealHash returns the hash of a block prior to it being sealed.
 func SealHash(header *types.Header, chainId *big.Int) (hash common.Hash) {
-	hasher := sha3.NewLegacyKeccak256()
+	hasher := crypto.NewLegacyKeccak256()
+	defer crypto.ReturnToPoolKeccak256(hasher)
+
 	encodeSigHeader(hasher, header, chainId)
 	hasher.Sum(hash[:0])
 	return hash
@@ -374,6 +376,11 @@ func (p *Parlia) verifyHeader(chain consensus.ChainHeaderReader, header *types.H
 			return errInvalidDifficulty
 		}
 	}
+
+	if header.WithdrawalsHash != nil {
+		return consensus.ErrUnexpectedWithdrawals
+	}
+
 	// If all checks passed, validate any special fields for hard forks
 	if err := misc.VerifyForkHashes(chain.Config(), header, false); err != nil {
 		return err
@@ -656,7 +663,8 @@ func (p *Parlia) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 }
 
 // Initialize runs any pre-transaction state modifications (e.g. epoch start)
-func (p *Parlia) Initialize(config *params.ChainConfig, chain consensus.ChainHeaderReader, e consensus.EpochReader, header *types.Header, txs []types.Transaction, uncles []*types.Header, syscall consensus.SystemCall) {
+func (p *Parlia) Initialize(config *params.ChainConfig, chain consensus.ChainHeaderReader, e consensus.EpochReader, header *types.Header,
+	state *state.IntraBlockState, txs []types.Transaction, uncles []*types.Header, syscall consensus.SystemCall) {
 }
 
 func (p *Parlia) splitTxs(txs types.Transactions, header *types.Header) (userTxs types.Transactions, systemTxs types.Transactions, err error) {
@@ -687,8 +695,8 @@ func (p *Parlia) splitTxs(txs types.Transactions, header *types.Header) (userTxs
 // Note: The block header and state database might be updated to reflect any
 // consensus rules that happen at finalization (e.g. block rewards).
 func (p *Parlia) Finalize(_ *params.ChainConfig, header *types.Header, state *state.IntraBlockState,
-	txs types.Transactions, _ []*types.Header, receipts types.Receipts, e consensus.EpochReader,
-	chain consensus.ChainHeaderReader, syscall consensus.SystemCall,
+	txs types.Transactions, _ []*types.Header, receipts types.Receipts, withdrawals []*types.Withdrawal,
+	e consensus.EpochReader, chain consensus.ChainHeaderReader, syscall consensus.SystemCall,
 ) (types.Transactions, types.Receipts, error) {
 	return p.finalize(header, state, txs, receipts, chain, false)
 }
@@ -783,14 +791,14 @@ func (p *Parlia) finalize(header *types.Header, state *state.IntraBlockState, tx
 // Note: The block header and state database might be updated to reflect any
 // consensus rules that happen at finalization (e.g. block rewards).
 func (p *Parlia) FinalizeAndAssemble(_ *params.ChainConfig, header *types.Header, state *state.IntraBlockState,
-	txs types.Transactions, _ []*types.Header, receipts types.Receipts, e consensus.EpochReader,
-	chain consensus.ChainHeaderReader, syscall consensus.SystemCall, call consensus.Call,
+	txs types.Transactions, _ []*types.Header, receipts types.Receipts, withdrawals []*types.Withdrawal,
+	e consensus.EpochReader, chain consensus.ChainHeaderReader, syscall consensus.SystemCall, call consensus.Call,
 ) (*types.Block, types.Transactions, types.Receipts, error) {
 	outTxs, outReceipts, err := p.finalize(header, state, txs, receipts, chain, true)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return types.NewBlock(header, outTxs, nil, outReceipts), outTxs, outReceipts, nil
+	return types.NewBlock(header, outTxs, nil, outReceipts, withdrawals), outTxs, outReceipts, nil
 }
 
 // Authorize injects a private key into the consensus engine to mint new blocks
@@ -895,7 +903,7 @@ func (p *Parlia) SealHash(header *types.Header) common.Hash {
 
 // CalcDifficulty is the difficulty adjustment algorithm. It returns the difficulty
 // that a new block should have.
-func (p *Parlia) CalcDifficulty(chain consensus.ChainHeaderReader, time, parentTime uint64, parentDifficulty *big.Int, parentNumber uint64, parentHash, parentUncleHash common.Hash, parentSeal []rlp.RawValue) *big.Int {
+func (p *Parlia) CalcDifficulty(chain consensus.ChainHeaderReader, time, parentTime uint64, parentDifficulty *big.Int, parentNumber uint64, parentHash, parentUncleHash common.Hash, _ uint64) *big.Int {
 	snap, err := p.snapshot(chain, parentNumber, parentHash, nil, false /* verify */)
 	if err != nil {
 		return nil
@@ -913,7 +921,7 @@ func CalcDifficulty(snap *Snapshot, signer common.Address) *big.Int {
 	return new(big.Int).Set(diffNoTurn)
 }
 
-func (p *Parlia) GenerateSeal(chain consensus.ChainHeaderReader, current, parent *types.Header, call consensus.Call) []rlp.RawValue {
+func (p *Parlia) GenerateSeal(chain consensus.ChainHeaderReader, current, parent *types.Header, call consensus.Call) []byte {
 	return nil
 }
 
@@ -925,6 +933,10 @@ func (p *Parlia) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 		Service:   &API{chain: chain, parlia: p},
 		Public:    false,
 	}}
+}
+
+func (p *Parlia) IsServiceTransaction(sender common.Address, syscall consensus.SystemCall) bool {
+	return false
 }
 
 func (p *Parlia) IsSystemTransaction(tx types.Transaction, header *types.Header) (bool, error) {
@@ -1244,6 +1256,7 @@ func (p *Parlia) systemCall(from, contract common.Address, data []byte, ibs *sta
 		math.MaxUint64/2, u256.Num0,
 		nil, nil,
 		data, nil, false,
+		true, // isFree
 	)
 	vmConfig := vm.Config{NoReceipts: true}
 	// Create a new context to be used in the EVM environment

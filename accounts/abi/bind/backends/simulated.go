@@ -45,6 +45,7 @@ import (
 	"github.com/ledgerwatch/erigon/event"
 	"github.com/ledgerwatch/erigon/params"
 	"github.com/ledgerwatch/erigon/rpc"
+	"github.com/ledgerwatch/erigon/turbo/snapshotsync"
 	"github.com/ledgerwatch/erigon/turbo/stages"
 	"github.com/ledgerwatch/log/v3"
 )
@@ -106,7 +107,7 @@ func NewSimulatedBackendWithConfig(alloc core.GenesisAlloc, config *params.Chain
 
 // A simulated backend always uses chainID 1337.
 func NewSimulatedBackend(t *testing.T, alloc core.GenesisAlloc, gasLimit uint64) *SimulatedBackend {
-	b := NewSimulatedBackendWithConfig(alloc, params.AllEthashProtocolChanges, gasLimit)
+	b := NewSimulatedBackendWithConfig(alloc, params.TestChainConfig, gasLimit)
 	t.Cleanup(func() {
 		b.m.DB.Close()
 	})
@@ -115,7 +116,10 @@ func NewSimulatedBackend(t *testing.T, alloc core.GenesisAlloc, gasLimit uint64)
 
 func (b *SimulatedBackend) DB() kv.RwDB               { return b.m.DB }
 func (b *SimulatedBackend) Agg() *state2.Aggregator22 { return b.m.HistoryV3Components() }
-func (b *SimulatedBackend) HistoryV3() bool           { return b.m.HistoryV3 }
+func (b *SimulatedBackend) BlockReader() *snapshotsync.BlockReaderWithSnapshots {
+	return snapshotsync.NewBlockReaderWithSnapshots(b.m.BlockSnapshots)
+}
+func (b *SimulatedBackend) HistoryV3() bool { return b.m.HistoryV3 }
 
 // Close terminates the underlying blockchain's update loop.
 func (b *SimulatedBackend) Close() {
@@ -773,6 +777,7 @@ func (m callMsg) Gas() uint64                  { return m.CallMsg.Gas }
 func (m callMsg) Value() *uint256.Int          { return m.CallMsg.Value }
 func (m callMsg) Data() []byte                 { return m.CallMsg.Data }
 func (m callMsg) AccessList() types.AccessList { return m.CallMsg.AccessList }
+func (m callMsg) IsFree() bool                 { return false }
 
 // filterBackend implements filters.Backend to support filtering for logs without
 // taking bloom-bits acceleration structures into account.

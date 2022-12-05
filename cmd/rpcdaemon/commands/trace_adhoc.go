@@ -213,7 +213,7 @@ func (args *TraceCallParam) ToMessage(globalGasCap uint64, baseFee *uint256.Int)
 	if args.AccessList != nil {
 		accessList = *args.AccessList
 	}
-	msg := types.NewMessage(addr, args.To, 0, value, gas, gasPrice, gasFeeCap, gasTipCap, data, accessList, false /* checkNonce */)
+	msg := types.NewMessage(addr, args.To, 0, value, gas, gasPrice, gasFeeCap, gasTipCap, data, accessList, false /* checkNonce */, false /* isFree */)
 	return msg, nil
 }
 
@@ -235,7 +235,7 @@ type OeTracer struct {
 	idx          []string     // Prefix for the "idx" inside operations, for easier navigation
 }
 
-func (ot *OeTracer) CaptureStart(env *vm.EVM, depth int, from common.Address, to common.Address, precompile bool, create bool, calltype vm.CallType, input []byte, gas uint64, value *big.Int, code []byte) {
+func (ot *OeTracer) CaptureStart(env *vm.EVM, depth int, from common.Address, to common.Address, precompile bool, create bool, callType vm.CallType, input []byte, gas uint64, value *uint256.Int, code []byte) {
 	//fmt.Printf("CaptureStart depth %d, from %x, to %x, create %t, input %x, gas %d, value %d, precompile %t\n", depth, from, to, create, input, gas, value, precompile)
 	if ot.r.VmTrace != nil {
 		var vmTrace *VmTrace
@@ -266,7 +266,7 @@ func (ot *OeTracer) CaptureStart(env *vm.EVM, depth int, from common.Address, to
 			vmTrace.Code = code
 		}
 	}
-	if precompile && depth > 0 && value.Sign() <= 0 {
+	if precompile && depth > 0 && value == nil {
 		ot.precompile = true
 		return
 	}
@@ -289,16 +289,16 @@ func (ot *OeTracer) CaptureStart(env *vm.EVM, depth int, from common.Address, to
 		traceIdx := topTrace.Subtraces
 		ot.traceAddr = append(ot.traceAddr, traceIdx)
 		topTrace.Subtraces++
-		if calltype == vm.DELEGATECALLT {
+		if callType == vm.DELEGATECALLT {
 			switch action := topTrace.Action.(type) {
 			case *CreateTraceAction:
-				value = action.Value.ToInt()
+				value, _ = uint256.FromBig(action.Value.ToInt())
 			case *CallTraceAction:
-				value = action.Value.ToInt()
+				value, _ = uint256.FromBig(action.Value.ToInt())
 			}
 		}
-		if calltype == vm.STATICCALLT {
-			value = big.NewInt(0)
+		if callType == vm.STATICCALLT {
+			value = uint256.NewInt(0)
 		}
 	}
 	trace.TraceAddress = make([]int, len(ot.traceAddr))
@@ -308,11 +308,11 @@ func (ot *OeTracer) CaptureStart(env *vm.EVM, depth int, from common.Address, to
 		action.From = from
 		action.Gas.ToInt().SetUint64(gas)
 		action.Init = common.CopyBytes(input)
-		action.Value.ToInt().Set(value)
+		action.Value.ToInt().Set(value.ToBig())
 		trace.Action = &action
 	} else {
 		action := CallTraceAction{}
-		switch calltype {
+		switch callType {
 		case vm.CALLT:
 			action.CallType = CALL
 		case vm.CALLCODET:
@@ -326,7 +326,7 @@ func (ot *OeTracer) CaptureStart(env *vm.EVM, depth int, from common.Address, to
 		action.To = to
 		action.Gas.ToInt().SetUint64(gas)
 		action.Input = common.CopyBytes(input)
-		action.Value.ToInt().Set(value)
+		action.Value.ToInt().Set(value.ToBig())
 		trace.Action = &action
 	}
 	ot.r.Trace = append(ot.r.Trace, trace)
@@ -442,7 +442,7 @@ func (ot *OeTracer) CaptureState(env *vm.EVM, pc uint64, op vm.OpCode, gas, cost
 			}
 			switch ot.lastOp {
 			case vm.CALLDATALOAD, vm.SLOAD, vm.MLOAD, vm.CALLDATASIZE, vm.LT, vm.GT, vm.DIV, vm.SDIV, vm.SAR, vm.AND, vm.EQ, vm.CALLVALUE, vm.ISZERO,
-				vm.ADD, vm.EXP, vm.CALLER, vm.SHA3, vm.SUB, vm.ADDRESS, vm.GAS, vm.MUL, vm.RETURNDATASIZE, vm.NOT, vm.SHR, vm.SHL,
+				vm.ADD, vm.EXP, vm.CALLER, vm.KECCAK256, vm.SUB, vm.ADDRESS, vm.GAS, vm.MUL, vm.RETURNDATASIZE, vm.NOT, vm.SHR, vm.SHL,
 				vm.EXTCODESIZE, vm.SLT, vm.OR, vm.NUMBER, vm.PC, vm.TIMESTAMP, vm.BALANCE, vm.SELFBALANCE, vm.MULMOD, vm.ADDMOD, vm.BASEFEE,
 				vm.BLOCKHASH, vm.BYTE, vm.XOR, vm.ORIGIN, vm.CODESIZE, vm.MOD, vm.SIGNEXTEND, vm.GASLIMIT, vm.DIFFICULTY, vm.SGT, vm.GASPRICE,
 				vm.MSIZE, vm.EXTCODEHASH, vm.SMOD, vm.CHAINID, vm.COINBASE:
@@ -864,20 +864,16 @@ func (api *TraceAPIImpl) Call(ctx context.Context, args TraceCallParam, traceTyp
 		blockNrOrHash = &rpc.BlockNumberOrHash{BlockNumber: &num}
 	}
 
-	blockNumber, hash, latest, err := rpchelper.GetBlockNumber(*blockNrOrHash, tx, api.filters)
+	blockNumber, hash, _, err := rpchelper.GetBlockNumber(*blockNrOrHash, tx, api.filters)
 	if err != nil {
 		return nil, err
 	}
-	var stateReader state.StateReader
-	if latest {
-		cacheView, err := api.stateCache.View(ctx, tx)
-		if err != nil {
-			return nil, err
-		}
-		stateReader = state.NewCachedReader2(cacheView, tx)
-	} else {
-		stateReader = state.NewPlainState(tx, blockNumber+1)
+
+	stateReader, err := rpchelper.CreateStateReader(ctx, tx, *blockNrOrHash, 0, api.filters, api.stateCache, api.historyV3(tx), api._agg)
+	if err != nil {
+		return nil, err
 	}
+
 	ibs := state.New(stateReader)
 
 	block, err := api.blockWithSenders(tx, hash, blockNumber)
@@ -1076,19 +1072,13 @@ func (api *TraceAPIImpl) doCallMany(ctx context.Context, dbtx kv.Tx, msgs []type
 		var num = rpc.LatestBlockNumber
 		parentNrOrHash = &rpc.BlockNumberOrHash{BlockNumber: &num}
 	}
-	blockNumber, hash, latest, err := rpchelper.GetBlockNumber(*parentNrOrHash, dbtx, api.filters)
+	blockNumber, hash, _, err := rpchelper.GetBlockNumber(*parentNrOrHash, dbtx, api.filters)
 	if err != nil {
 		return nil, err
 	}
-	var stateReader state.StateReader
-	if latest {
-		cacheView, err := api.stateCache.View(ctx, dbtx)
-		if err != nil {
-			return nil, err
-		}
-		stateReader = state.NewCachedReader2(cacheView, dbtx) // this cache stays between RPC calls
-	} else {
-		stateReader = state.NewPlainState(dbtx, blockNumber+1)
+	stateReader, err := rpchelper.CreateStateReader(ctx, dbtx, *parentNrOrHash, 0, api.filters, api.stateCache, api.historyV3(dbtx), api._agg)
+	if err != nil {
+		return nil, err
 	}
 	stateCache := shards.NewStateCache(32, 0 /* no limit */) // this cache living only during current RPC call, but required to store state writes
 	cachedReader := state.NewCachedReader(stateReader, stateCache)

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/bodgit/sevenzip"
-	"github.com/ledgerwatch/erigon/common"
+	"github.com/ledgerwatch/erigon-lib/common/dir"
 	"golang.org/x/sync/semaphore"
 	"io"
 	"os"
@@ -15,7 +15,7 @@ import (
 )
 
 func Uncompress(ctx context.Context, from, to string) ([]string, error) {
-	if !common.FileExist(from) {
+	if !dir.FileExist(from) {
 		return nil, errors.New(from + " not exist!")
 	}
 	if err := os.MkdirAll(to, 0744); nil != err {

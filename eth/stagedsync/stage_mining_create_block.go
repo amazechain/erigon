@@ -31,10 +31,11 @@ import (
 )
 
 type MiningBlock struct {
-	Header   *types.Header
-	Uncles   []*types.Header
-	Txs      types.Transactions
-	Receipts types.Receipts
+	Header      *types.Header
+	Uncles      []*types.Header
+	Txs         types.Transactions
+	Receipts    types.Receipts
+	Withdrawals []*types.Withdrawal
 
 	LocalTxs  types.TransactionsStream
 	RemoteTxs types.TransactionsStream
@@ -249,6 +250,7 @@ func SpawnMiningCreateBlockStage(s *StageState, tx kv.RwTx, cfg MiningCreateBloc
 
 		current.Header = header
 		current.Uncles = nil
+		current.Withdrawals = cfg.blockBuilderParameters.Withdrawals
 		return nil
 	}
 
@@ -339,6 +341,7 @@ func SpawnMiningCreateBlockStage(s *StageState, tx kv.RwTx, cfg MiningCreateBloc
 
 	current.Header = header
 	current.Uncles = makeUncles(env.uncles)
+	current.Withdrawals = nil
 	return nil
 }
 
@@ -419,7 +422,7 @@ func filterBadTransactions(tx kv.Tx, transactions []types.Transaction, config pa
 			}
 			// Make sure the transaction gasFeeCap is greater than the block's baseFee.
 			if !transaction.GetFeeCap().IsZero() || !transaction.GetTip().IsZero() {
-				if err := core.CheckEip1559TxGasFeeCap(sender, transaction.GetFeeCap(), transaction.GetTip(), baseFee256); err != nil {
+				if err := core.CheckEip1559TxGasFeeCap(sender, transaction.GetFeeCap(), transaction.GetTip(), baseFee256, false /* isFree */); err != nil {
 					transactions = transactions[1:]
 					feeTooLowCnt++
 					continue

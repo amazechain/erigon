@@ -7,11 +7,14 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
 	common2 "github.com/ledgerwatch/erigon-lib/common"
+	"github.com/ledgerwatch/erigon-lib/common/dir"
+	downloader2 "github.com/ledgerwatch/erigon-lib/downloader"
+	"github.com/ledgerwatch/erigon-lib/downloader/downloadercfg"
 	"github.com/ledgerwatch/erigon-lib/kv"
-	"github.com/ledgerwatch/erigon/cmd/downloader/downloader/downloadercfg"
-	"github.com/ledgerwatch/erigon/common"
+	"github.com/ledgerwatch/erigon-lib/kv/mdbx"
 	"github.com/ledgerwatch/erigon/turbo/clipdb"
 	"github.com/ledgerwatch/log/v3"
+	mdbx2 "github.com/torquem-ch/mdbx-go/mdbx"
 	"golang.org/x/sync/semaphore"
 	"net/http"
 	"os"
@@ -29,7 +32,7 @@ type ClipDownloader struct {
 	cfg *downloadercfg.Cfg
 
 	statsLock *sync.RWMutex
-	stats     AggStats
+	stats     downloader2.AggStats
 
 	folder storage.ClientImplCloser
 }
@@ -68,7 +71,7 @@ func Clip(cfg *downloadercfg.Cfg, t clipdb.Torrent) (*ClipDownloader, error) {
 	torrentFileName := filepath.Join(cfg.DataDir, t.Filename())
 	var metaInfo *metainfo.MetaInfo
 
-	if !common.FileExist(torrentFileName) {
+	if !dir.FileExist(torrentFileName) {
 		response, err := http.Get(t.URL())
 		if err != nil {
 			return nil, fmt.Errorf("Error downloading torrent file: %s", err)
@@ -154,7 +157,7 @@ func (d *ClipDownloader) ReCalcStats(interval time.Duration) {
 	d.stats = stats
 }
 
-func (d *ClipDownloader) Stats() AggStats {
+func (d *ClipDownloader) Stats() downloader2.AggStats {
 	d.statsLock.RLock()
 	defer d.statsLock.RUnlock()
 	return d.stats
@@ -270,4 +273,37 @@ func ClipLoop(ctx context.Context, d *ClipDownloader, silent bool) {
 			}
 		}
 	}
+}
+
+func openClient(cfg *torrent.ClientConfig) (db kv.RwDB, c storage.PieceCompletion, m storage.ClientImplCloser, torrentClient *torrent.Client, err error) {
+	snapDir := cfg.DataDir
+	db, err = mdbx.NewMDBX(log.New()).
+		Flags(func(f uint) uint { return f | mdbx2.SafeNoSync }).
+		Label(kv.DownloaderDB).
+		WithTableCfg(func(defaultBuckets kv.TableCfg) kv.TableCfg { return kv.DownloaderTablesCfg }).
+		SyncPeriod(15 * time.Second).
+		Path(filepath.Join(snapDir, "db")).
+		Open()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	c, err = downloader2.NewMdbxPieceCompletion(db)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("torrentcfg.NewMdbxPieceCompletion: %w", err)
+	}
+	m = storage.NewMMapWithCompletion(snapDir, c)
+	cfg.DefaultStorage = m
+
+	for retry := 0; retry < 5; retry++ {
+		torrentClient, err = torrent.NewClient(cfg)
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("torrent.NewClient: %w", err)
+	}
+
+	return db, c, m, torrentClient, nil
 }

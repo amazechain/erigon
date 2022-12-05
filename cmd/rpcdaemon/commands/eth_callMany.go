@@ -16,7 +16,7 @@ import (
 	"github.com/ledgerwatch/erigon/core/state"
 	"github.com/ledgerwatch/erigon/core/types"
 	"github.com/ledgerwatch/erigon/core/vm"
-	rpcapi "github.com/ledgerwatch/erigon/internal/ethapi"
+	"github.com/ledgerwatch/erigon/core/vm/evmtypes"
 	"github.com/ledgerwatch/erigon/rpc"
 	"github.com/ledgerwatch/erigon/turbo/adapter/ethapi"
 	"github.com/ledgerwatch/erigon/turbo/rpchelper"
@@ -34,7 +34,7 @@ type BlockOverrides struct {
 }
 
 type Bundle struct {
-	Transactions  []rpcapi.CallArgs
+	Transactions  []ethapi.CallArgs
 	BlockOverride BlockOverrides
 }
 
@@ -43,7 +43,7 @@ type StateContext struct {
 	TransactionIndex *int
 }
 
-func blockHeaderOverride(blockCtx *vm.BlockContext, blockOverride BlockOverrides, overrideBlockHash map[uint64]common.Hash) {
+func blockHeaderOverride(blockCtx *evmtypes.BlockContext, blockOverride BlockOverrides, overrideBlockHash map[uint64]common.Hash) {
 	if blockOverride.BlockNumber != nil {
 		blockCtx.BlockNumber = uint64(*blockOverride.BlockNumber)
 	}
@@ -69,13 +69,13 @@ func blockHeaderOverride(blockCtx *vm.BlockContext, blockOverride BlockOverrides
 	}
 }
 
-func (api *APIImpl) CallMany(ctx context.Context, bundles []Bundle, simulateContext StateContext, stateOverride *rpcapi.StateOverrides, timeoutMilliSecondsPtr *int64) ([][]map[string]interface{}, error) {
+func (api *APIImpl) CallMany(ctx context.Context, bundles []Bundle, simulateContext StateContext, stateOverride *ethapi.StateOverrides, timeoutMilliSecondsPtr *int64) ([][]map[string]interface{}, error) {
 	var (
 		hash               common.Hash
 		replayTransactions types.Transactions
 		evm                *vm.EVM
-		blockCtx           vm.BlockContext
-		txCtx              vm.TxContext
+		blockCtx           evmtypes.BlockContext
+		txCtx              evmtypes.TxContext
 		overrideBlockHash  map[uint64]common.Hash
 		baseFee            uint256.Int
 	)
@@ -130,7 +130,7 @@ func (api *APIImpl) CallMany(ctx context.Context, bundles []Bundle, simulateCont
 
 	replayTransactions = block.Transactions()[:transactionIndex]
 
-	stateReader, err := rpchelper.CreateStateReader(ctx, tx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(blockNum-1)), api.filters, api.stateCache, api.historyV3(tx), api._agg)
+	stateReader, err := rpchelper.CreateStateReader(ctx, tx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(blockNum-1)), 0, api.filters, api.stateCache, api.historyV3(tx), api._agg)
 
 	if err != nil {
 		return nil, err
@@ -163,7 +163,7 @@ func (api *APIImpl) CallMany(ctx context.Context, bundles []Bundle, simulateCont
 		baseFee.SetFromBig(parent.BaseFee)
 	}
 
-	blockCtx = vm.BlockContext{
+	blockCtx = evmtypes.BlockContext{
 		CanTransfer: core.CanTransfer,
 		Transfer:    core.Transfer,
 		GetHash:     getHash,

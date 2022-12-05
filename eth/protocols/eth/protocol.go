@@ -430,12 +430,14 @@ type BlockBodiesRLPPacket66 struct {
 type BlockBody struct {
 	Transactions []types.Transaction // Transactions contained within a block
 	Uncles       []*types.Header     // Uncles contained within a block
+	Withdrawals  []*types.Withdrawal // Withdrawals contained within a block
 }
 
 // BlockRawBody represents the data content of a single block.
 type BlockRawBody struct {
-	Transactions [][]byte        // Transactions contained within a block
-	Uncles       []*types.Header // Uncles contained within a block
+	Transactions [][]byte            // Transactions contained within a block
+	Uncles       []*types.Header     // Uncles contained within a block
+	Withdrawals  []*types.Withdrawal // Withdrawals contained within a block
 }
 
 func (bb BlockBody) EncodeRLP(w io.Writer) error {
@@ -817,10 +819,7 @@ func (ptp66 PooledTransactionsPacket66) EncodeRLP(w io.Writer) error {
 	encodingSize := 0
 	// Size of RequestID
 	encodingSize++
-	var requestIdLen int
-	if ptp66.RequestId >= 128 {
-		requestIdLen = (bits.Len64(ptp66.RequestId) + 7) / 8
-	}
+	requestIdLen := rlp.IntLenExcludingHead(ptp66.RequestId)
 	encodingSize += requestIdLen
 	// size of Transactions
 	encodingSize++

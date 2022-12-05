@@ -24,6 +24,8 @@ import (
 	"testing"
 
 	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/common/hexutil"
@@ -268,35 +270,26 @@ func makeBenchBlock() *Block {
 			Extra:      []byte("benchmark uncle"),
 		}
 	}
-	return NewBlock(header, txs, uncles, receipts)
+	return NewBlock(header, txs, uncles, receipts, nil /* withdrawals */)
 }
 
 func TestCanEncodeAndDecodeRawBody(t *testing.T) {
 	body := &RawBody{
 		Uncles: []*Header{
 			{
-				ParentHash:    common.Hash{},
-				UncleHash:     common.Hash{},
-				Coinbase:      common.Address{},
-				Root:          common.Hash{},
-				TxHash:        common.Hash{},
-				ReceiptHash:   common.Hash{},
-				Bloom:         Bloom{},
-				Difficulty:    big.NewInt(100),
-				Number:        big.NewInt(1000),
-				GasLimit:      50,
-				GasUsed:       60,
-				Time:          90,
-				Extra:         []byte("testing"),
-				MixDigest:     common.Hash{},
-				Nonce:         BlockNonce{},
-				BaseFee:       nil,
-				Eip1559:       false,
-				Seal:          nil,
-				WithSeal:      false,
-				Verkle:        false,
-				VerkleProof:   nil,
-				VerkleKeyVals: nil,
+				ParentHash:  common.Hash{},
+				UncleHash:   common.Hash{},
+				Coinbase:    common.Address{},
+				Root:        common.Hash{},
+				TxHash:      common.Hash{},
+				ReceiptHash: common.Hash{},
+				Bloom:       Bloom{},
+				Difficulty:  big.NewInt(100),
+				Number:      big.NewInt(1000),
+				GasLimit:    50,
+				GasUsed:     60,
+				Time:        90,
+				Extra:       []byte("testing"),
 			},
 			{
 				GasUsed:    108,
@@ -360,4 +353,76 @@ func TestCanEncodeAndDecodeRawBody(t *testing.T) {
 	if string(resultJson) != string(expectedJson) {
 		t.Fatalf("encoded and decoded json do not match, got\n%s\nwant\n%s", resultJson, expectedJson)
 	}
+}
+
+func TestAuRaHeaderEncoding(t *testing.T) {
+	difficulty, ok := new(big.Int).SetString("8398142613866510000000000000000000000000000000", 10)
+	require.True(t, ok)
+
+	header := Header{
+		ParentHash:  common.HexToHash("0x8b00fcf1e541d371a3a1b79cc999a85cc3db5ee5637b5159646e1acd3613fd15"),
+		UncleHash:   common.HexToHash("1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347"),
+		Coinbase:    common.HexToAddress("0x571846e42308df2dad8ed792f44a8bfddf0acb4d"),
+		Root:        common.HexToHash("0x351780124dae86b84998c6d4fe9a88acfb41b4856b4f2c56767b51a4e2f94dd4"),
+		TxHash:      common.HexToHash("0x6a35133fbff7ea2cb5ee7635c9fb623f96d31d689d806a2bfe40a2b1d90ee99c"),
+		ReceiptHash: common.HexToHash("0x324f54860e214ea896ea7a05bda30f85541be3157de77a9059a04fdb1e86badd"),
+		Difficulty:  difficulty,
+		Number:      big.NewInt(24679923),
+		GasLimit:    30_000_000,
+		GasUsed:     3_074_345,
+		Time:        1666343339,
+		Extra:       common.FromHex("0x1234"),
+		BaseFee:     big.NewInt(7_000_000_000),
+		AuRaStep:    13078,
+		AuRaSeal:    common.FromHex("0x75bda30f85541be059646e1acd3613fd100846e42308df2dad8ed79b9a9e91c9db994386599a683820a1394684d41fc139c4805684142e6b15a722a2e9cc51f7ee"),
+	}
+
+	encoded, err := rlp.EncodeToBytes(&header)
+	require.NoError(t, err)
+
+	var decoded Header
+	require.NoError(t, rlp.DecodeBytes(encoded, &decoded))
+
+	assert.Equal(t, header, decoded)
+}
+
+func TestWithdrawalsEncoding(t *testing.T) {
+	header := Header{
+		ParentHash: common.HexToHash("0x8b00fcf1e541d371a3a1b79cc999a85cc3db5ee5637b5159646e1acd3613fd15"),
+		Coinbase:   common.HexToAddress("0x571846e42308df2dad8ed792f44a8bfddf0acb4d"),
+		Root:       common.HexToHash("0x351780124dae86b84998c6d4fe9a88acfb41b4856b4f2c56767b51a4e2f94dd4"),
+		Difficulty: common.Big0,
+		Number:     big.NewInt(20_000_000),
+		GasLimit:   30_000_000,
+		GasUsed:    3_074_345,
+		Time:       1666343339,
+		Extra:      make([]byte, 0),
+		MixDigest:  common.HexToHash("0x7f04e338b206ef863a1fad30e082bbb61571c74e135df8d1677e3f8b8171a09b"),
+		BaseFee:    big.NewInt(7_000_000_000),
+	}
+
+	withdrawals := make([]*Withdrawal, 2)
+	withdrawals[0] = &Withdrawal{
+		Index:     44555666,
+		Validator: 89,
+		Address:   common.HexToAddress("0x690b9a9e9aa1c9db991c7721a92d351db4fac990"),
+		Amount:    *uint256.NewInt(2 * params.Ether),
+	}
+	withdrawals[1] = &Withdrawal{
+		Index:     44555667,
+		Validator: 37,
+		Address:   common.HexToAddress("0x95222290dd7278aa3ddd389cc1e1d165cc4bafe5"),
+		Amount:    *uint256.NewInt(5 * params.Ether),
+	}
+
+	block := NewBlock(&header, nil, nil, nil, withdrawals)
+	_ = block.Size()
+
+	encoded, err := rlp.EncodeToBytes(block)
+	require.NoError(t, err)
+
+	var decoded Block
+	require.NoError(t, rlp.DecodeBytes(encoded, &decoded))
+
+	assert.Equal(t, block, &decoded)
 }

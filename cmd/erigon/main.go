@@ -4,24 +4,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ledgerwatch/erigon-lib/common/dir"
 	"github.com/ledgerwatch/erigon/cmd/downloader/downloader"
-	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/turbo/clipdb"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 
+	"github.com/ledgerwatch/erigon-lib/common/dbg"
 	"github.com/ledgerwatch/log/v3"
 	"github.com/pelletier/go-toml"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v2"
 
-	"github.com/ledgerwatch/erigon-lib/common/dbg"
 	"github.com/ledgerwatch/erigon/cmd/utils"
 	"github.com/ledgerwatch/erigon/params"
 	erigonapp "github.com/ledgerwatch/erigon/turbo/app"
 	erigoncli "github.com/ledgerwatch/erigon/turbo/cli"
+	"github.com/ledgerwatch/erigon/turbo/logging"
 	"github.com/ledgerwatch/erigon/turbo/node"
 )
 
@@ -46,12 +47,13 @@ func main() {
 	}
 }
 
-func runErigon(cliCtx *cli.Context) {
-	logger := log.New()
+func runErigon(cliCtx *cli.Context) error {
+	logger := logging.GetLoggerCtx("erigon", cliCtx)
+
 	// initializing the node and providing the current git commit there
 	logger.Info("Build info", "git_branch", params.GitBranch, "git_tag", params.GitTag, "git_commit", params.GitCommit)
 
-	configFilePath := cliCtx.GlobalString(utils.ConfigFlag.Name)
+	configFilePath := cliCtx.String(utils.ConfigFlag.Name)
 	if configFilePath != "" {
 		if err := setFlagsFromConfigFile(cliCtx, configFilePath); err != nil {
 			log.Warn("failed setting config flags from yaml/toml file", "err", err)
@@ -61,24 +63,21 @@ func runErigon(cliCtx *cli.Context) {
 	nodeCfg := node.NewNodConfigUrfave(cliCtx)
 	ethCfg := node.NewEthConfigUrfave(cliCtx, nodeCfg)
 
-	if !common.FileExist(nodeCfg.Dirs.Chaindata) && !ethCfg.NoClipDB {
+	if !dir.FileExist(nodeCfg.Dirs.Chaindata) && !ethCfg.NoClipDB {
 		log.Info("[ClipDB] start download clipped DB")
 		t := clipdb.LatestTorrent()
 		d, err := downloader.Clip(ethCfg.Downloader, t)
 		if nil != err {
-			log.Error("[ClipDB] downloader ", "err", err)
-			return
+			return err
 		}
 		downloader.ClipLoop(context.Background(), d, false)
-		if !common.FileExist(filepath.Join(ethCfg.Downloader.DataDir, t.Filename())) {
-			log.Error("[ClipDB] download failed!")
-			return
+		if !dir.FileExist(filepath.Join(ethCfg.Downloader.DataDir, t.Filename())) {
+			return fmt.Errorf("[ClipDB] download failed! %s not exits", filepath.Join(ethCfg.Downloader.DataDir, t.Filename()))
 		}
 		log.Info("[ClipDB]  un compress files")
 		cont, err := clipdb.Uncompress(context.Background(), filepath.Join(nodeCfg.Dirs.Snap, strings.TrimRight(t.Filename(), ".torrent")), nodeCfg.Dirs.Chaindata)
 		if nil != err {
-			log.Error("[ClipDB] uncompress failed!", "err", err)
-			return
+			return err
 		}
 		log.Info("[ClipDB] download files", strings.Join(cont, ","))
 	}
@@ -86,12 +85,13 @@ func runErigon(cliCtx *cli.Context) {
 	ethNode, err := node.New(nodeCfg, ethCfg, logger)
 	if err != nil {
 		log.Error("Erigon startup", "err", err)
-		return
+		return err
 	}
 	err = ethNode.Serve()
 	if err != nil {
 		log.Error("error while serving an Erigon node", "err", err)
 	}
+	return err
 }
 
 func setFlagsFromConfigFile(ctx *cli.Context, filePath string) error {
@@ -122,19 +122,19 @@ func setFlagsFromConfigFile(ctx *cli.Context, filePath string) error {
 	}
 	// sets global flags to value in yaml/toml file
 	for key, value := range fileConfig {
-		if !ctx.GlobalIsSet(key) {
+		if !ctx.IsSet(key) {
 			if reflect.ValueOf(value).Kind() == reflect.Slice {
 				sliceInterface := value.([]interface{})
 				s := make([]string, len(sliceInterface))
 				for i, v := range sliceInterface {
 					s[i] = fmt.Sprintf("%v", v)
 				}
-				err := ctx.GlobalSet(key, strings.Join(s, ","))
+				err := ctx.Set(key, strings.Join(s, ","))
 				if err != nil {
 					return fmt.Errorf("failed setting %s flag with values=%s error=%s", key, s, err)
 				}
 			} else {
-				err := ctx.GlobalSet(key, fmt.Sprintf("%v", value))
+				err := ctx.Set(key, fmt.Sprintf("%v", value))
 				if err != nil {
 					return fmt.Errorf("failed setting %s flag with value=%v error=%s", key, value, err)
 

@@ -14,23 +14,25 @@ type BlockBuilderFunc func(param *core.BlockBuilderParameters, interrupt *int32)
 
 // BlockBuilder wraps a goroutine that builds Proof-of-Stake payloads (PoS "mining")
 type BlockBuilder struct {
-	emptyHeader *types.Header
-	interrupt   int32
-	syncCond    *sync.Cond
-	block       *types.Block
-	err         error
+	interrupt int32
+	syncCond  *sync.Cond
+	block     *types.Block
+	err       error
 }
 
-func NewBlockBuilder(build BlockBuilderFunc, param *core.BlockBuilderParameters, emptyHeader *types.Header) *BlockBuilder {
+func NewBlockBuilder(build BlockBuilderFunc, param *core.BlockBuilderParameters) *BlockBuilder {
 	b := new(BlockBuilder)
-	b.emptyHeader = emptyHeader
 	b.syncCond = sync.NewCond(new(sync.Mutex))
 
 	go func() {
-		log.Debug("Building block...")
+		log.Info("Building block...")
 		t := time.Now()
 		block, err := build(param, &b.interrupt)
-		log.Debug("Built block", "hash", block.Hash(), "height", block.NumberU64(), "txs", len(block.Transactions()), "gas used %", 100*float64(block.GasUsed())/float64(block.GasLimit()), "time", time.Since(t))
+		if err != nil {
+			log.Warn("Failed to build a block", "err", err)
+		} else {
+			log.Info("Built block", "hash", block.Hash(), "height", block.NumberU64(), "txs", len(block.Transactions()), "gas used %", 100*float64(block.GasUsed())/float64(block.GasLimit()), "time", time.Since(t))
+		}
 
 		b.syncCond.L.Lock()
 		defer b.syncCond.L.Unlock()
@@ -42,7 +44,7 @@ func NewBlockBuilder(build BlockBuilderFunc, param *core.BlockBuilderParameters,
 	return b
 }
 
-func (b *BlockBuilder) Stop() *types.Block {
+func (b *BlockBuilder) Stop() (*types.Block, error) {
 	atomic.StoreInt32(&b.interrupt, 1)
 
 	b.syncCond.L.Lock()
@@ -51,12 +53,7 @@ func (b *BlockBuilder) Stop() *types.Block {
 		b.syncCond.Wait()
 	}
 
-	if b.err != nil {
-		log.Error("BlockBuilder", "err", b.err)
-		return types.NewBlock(b.emptyHeader, nil, nil, nil)
-	}
-
-	return b.block
+	return b.block, b.err
 }
 
 func (b *BlockBuilder) Block() *types.Block {

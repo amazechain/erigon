@@ -9,6 +9,7 @@ import (
 	"github.com/ledgerwatch/erigon-lib/kv"
 	"github.com/ledgerwatch/erigon-lib/kv/memdb"
 	libstate "github.com/ledgerwatch/erigon-lib/state"
+	"github.com/ledgerwatch/erigon/cmd/state/exec22"
 	"github.com/ledgerwatch/erigon/common/changeset"
 	"github.com/ledgerwatch/erigon/core/rawdb"
 	"github.com/ledgerwatch/erigon/core/state"
@@ -133,17 +134,19 @@ func apply(tx kv.RwTx, agg *libstate.Aggregator22) (beforeBlock, afterBlock test
 			stateWriter.SetTxNum(n)
 			stateWriter.ResetWriteSet()
 		}, func(n, from, numberOfBlocks uint64) {
-			txTask := &state.TxTask{
+			txTask := &exec22.TxTask{
 				BlockNum:   n,
 				Rules:      params.TestRules,
-				Block:      nil,
 				TxNum:      n,
 				TxIndex:    0,
 				Final:      true,
 				WriteLists: stateWriter.WriteSet(),
 			}
 			txTask.AccountPrevs, txTask.AccountDels, txTask.StoragePrevs, txTask.CodePrevs = stateWriter.PrevAndDels()
-			if err := rs.Apply(tx, txTask, agg); err != nil {
+			if err := rs.ApplyState(tx, txTask, agg); err != nil {
+				panic(err)
+			}
+			if err := rs.ApplyHistory(tx, txTask, agg); err != nil {
 				panic(err)
 			}
 			if n == from+numberOfBlocks-1 {
@@ -151,7 +154,7 @@ func apply(tx kv.RwTx, agg *libstate.Aggregator22) (beforeBlock, afterBlock test
 				if err != nil {
 					panic(err)
 				}
-				if err := agg.Flush(); err != nil {
+				if err := agg.Flush(tx); err != nil {
 					panic(err)
 				}
 			}

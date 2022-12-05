@@ -23,6 +23,58 @@ func WriteMap() bool {
 }
 
 var (
+	mergeTr     int
+	mergeTrOnce sync.Once
+)
+
+func MergeTr() int {
+	mergeTrOnce.Do(func() {
+		v, _ := os.LookupEnv("MERGE_THRESHOLD")
+		if v != "" {
+			i, err := strconv.Atoi(v)
+			if err != nil {
+				panic(err)
+			}
+			if i < 0 || i > 4 {
+				panic(i)
+			}
+			mergeTr = i
+		}
+	})
+	return mergeTr
+}
+
+var (
+	mdbxReadahead     bool
+	mdbxReadaheadOnce sync.Once
+)
+
+func MdbxReadAhead() bool {
+	mdbxReadaheadOnce.Do(func() {
+		v, _ := os.LookupEnv("MDBX_READAHEAD")
+		if v == "true" {
+			mdbxReadahead = true
+		}
+	})
+	return mdbxReadahead
+}
+
+var (
+	discardHistory     bool
+	discardHistoryOnce sync.Once
+)
+
+func DiscardHistory() bool {
+	discardHistoryOnce.Do(func() {
+		v, _ := os.LookupEnv("DISCARD_HISTORY")
+		if v == "true" {
+			discardHistory = true
+		}
+	})
+	return discardHistory
+}
+
+var (
 	bigRoTx    uint
 	getBigRoTx sync.Once
 )

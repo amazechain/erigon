@@ -276,7 +276,7 @@ func (sdb *IntraBlockState) GetCodeSize(addr common.Address) int {
 	if stateObject.code != nil {
 		return len(stateObject.code)
 	}
-	len, err := sdb.stateReader.ReadAccountCodeSize(addr, stateObject.data.Incarnation, common.BytesToHash(stateObject.CodeHash()))
+	len, err := sdb.stateReader.ReadAccountCodeSize(addr, stateObject.data.Incarnation, stateObject.data.CodeHash)
 	if err != nil {
 		sdb.setErrorUnsafe(err)
 	}
@@ -773,7 +773,7 @@ func (sdb *IntraBlockState) CommitBlock(chainRules *params.Rules, stateWriter St
 }
 
 func (sdb *IntraBlockState) BalanceIncreaseSet() map[common.Address]uint256.Int {
-	s := map[common.Address]uint256.Int{}
+	s := make(map[common.Address]uint256.Int, len(sdb.balanceInc))
 	for addr, bi := range sdb.balanceInc {
 		if !bi.transferred {
 			s[addr] = bi.increase
