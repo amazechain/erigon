@@ -103,6 +103,7 @@ func (ethash *Ethash) Type() params.ConsensusType {
 
 // Author implements consensus.Engine, returning the header's coinbase as the
 // proof-of-work verified author of the block.
+// This is thread-safe (only access the header.Coinbase)
 func (ethash *Ethash) Author(header *types.Header) (common.Address, error) {
 	return header.Coinbase, nil
 }
@@ -641,7 +642,7 @@ func AccumulateRewards(config *params.ChainConfig, header *types.Header, uncles 
 	return *reward, uncleRewards
 }
 
-// accumulateRewards retreives rewards for a block and applies them to the coinbase accounts for miner and uncle miners
+// accumulateRewards retrieves rewards for a block and applies them to the coinbase accounts for miner and uncle miners
 func accumulateRewards(config *params.ChainConfig, state *state.IntraBlockState, header *types.Header, uncles []*types.Header) {
 	minerReward, uncleRewards := AccumulateRewards(config, header, uncles)
 	for i, uncle := range uncles {

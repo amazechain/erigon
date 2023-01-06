@@ -11,6 +11,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/c2h5oh/datasize"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
+	"github.com/ledgerwatch/erigon-lib/common/dbg"
 	"github.com/ledgerwatch/erigon-lib/etl"
 	"github.com/ledgerwatch/erigon-lib/kv"
 	"github.com/ledgerwatch/erigon-lib/kv/bitmapdb"
@@ -144,7 +145,7 @@ func promoteLogIndex(logPrefix string, tx kv.RwTx, start uint64, endBlock uint64
 		default:
 		case <-logEvery.C:
 			var m runtime.MemStats
-			libcommon.ReadMemStats(&m)
+			dbg.ReadMemStats(&m)
 			log.Info(fmt.Sprintf("[%s] Progress", logPrefix), "number", blockNum, "alloc", libcommon.ByteCount(m.Alloc), "sys", libcommon.ByteCount(m.Sys))
 		case <-checkFlushEvery.C:
 			if needFlush(topics, cfg.bufLimit) {
@@ -278,7 +279,7 @@ func unwindLogIndex(logPrefix string, db kv.RwTx, to uint64, cfg LogIndexCfg, qu
 		return err
 	}
 	defer c.Close()
-	for k, v, err := c.Seek(dbutils.EncodeBlockNumber(to + 1)); k != nil; k, v, err = c.Next() {
+	for k, v, err := c.Seek(libcommon.EncodeTs(to + 1)); k != nil; k, v, err = c.Next() {
 		if err != nil {
 			return err
 		}

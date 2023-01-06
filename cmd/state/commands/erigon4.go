@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/holiman/uint256"
+	"github.com/ledgerwatch/erigon-lib/common/dbg"
 	"github.com/ledgerwatch/log/v3"
 	"github.com/spf13/cobra"
 
@@ -196,7 +197,7 @@ func Erigon4(genesis *core.Genesis, chainConfig *params.ChainConfig, logger log.
 		return fmt.Errorf("reopen snapshot segments: %w", err)
 	}
 	blockReader = snapshotsync.NewBlockReaderWithSnapshots(allSnapshots)
-	engine := initConsensusEngine(chainConfig, logger, allSnapshots)
+	engine := initConsensusEngine(chainConfig, allSnapshots)
 
 	getHeader := func(hash common.Hash, number uint64) *types.Header {
 		h, err := blockReader.Header(ctx, historyTx, hash, number)
@@ -220,7 +221,7 @@ func Erigon4(genesis *core.Genesis, chainConfig *params.ChainConfig, logger log.
 			log.Info("Initiated tx commit", "block", blockNum, "space dirty", libcommon.ByteCount(spaceDirty))
 		}
 		log.Info("database commitment", "block", blockNum, "txNum", txn)
-		if err := agg.Flush(); err != nil {
+		if err := agg.Flush(ctx); err != nil {
 			return err
 		}
 		if err = rwTx.Commit(); err != nil {
@@ -307,7 +308,7 @@ func (s *stat23) print(aStats libstate.FilesStats, logger log.Logger) {
 
 func (s *stat23) delta(aStats libstate.FilesStats, blockNum, txNum uint64) *stat23 {
 	currentTime := time.Now()
-	libcommon.ReadMemStats(&s.mem)
+	dbg.ReadMemStats(&s.mem)
 
 	interval := currentTime.Sub(s.prevTime).Seconds()
 	s.blockNum = blockNum
@@ -335,7 +336,7 @@ func processBlock23(startTxNum uint64, trace bool, txNumStart uint64, rw *Reader
 	gp := new(core.GasPool).AddGas(block.GasLimit())
 	usedGas := new(uint64)
 	var receipts types.Receipts
-	rules := chainConfig.Rules(block.NumberU64())
+	rules := chainConfig.Rules(block.NumberU64(), block.Time())
 	txNum := txNumStart
 	ww.w.SetTxNum(txNum)
 	ww.w.SetBlockNum(block.NumberU64())

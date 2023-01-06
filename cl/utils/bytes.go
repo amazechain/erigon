@@ -16,13 +16,18 @@ package utils
 import (
 	"encoding/binary"
 
-	ssz "github.com/ferranbt/fastssz"
 	"github.com/golang/snappy"
+	"github.com/klauspost/compress/zstd"
+	ssz "github.com/prysmaticlabs/fastssz"
 )
 
 func Uint32ToBytes4(n uint32) (ret [4]byte) {
 	binary.BigEndian.PutUint32(ret[:], n)
 	return
+}
+
+func Bytes4ToUint32(bytes4 [4]byte) uint32 {
+	return binary.BigEndian.Uint32(bytes4[:])
 }
 
 func BytesToBytes4(b []byte) (ret [4]byte) {
@@ -73,4 +78,20 @@ func DecodeSSZSnappy(dst ssz.Unmarshaler, src []byte) error {
 	}
 
 	return nil
+}
+
+func CompressZstd(b []byte) []byte {
+	wr, err := zstd.NewWriter(nil)
+	if err != nil {
+		panic(err)
+	}
+	return wr.EncodeAll(b, nil)
+}
+
+func DecompressZstd(b []byte) ([]byte, error) {
+	r, err := zstd.NewReader(nil)
+	if err != nil {
+		panic(err)
+	}
+	return r.DecodeAll(b, nil)
 }

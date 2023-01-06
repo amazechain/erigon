@@ -12,12 +12,14 @@ import (
 	"github.com/ledgerwatch/erigon-lib/gointerfaces/txpool"
 	"github.com/ledgerwatch/erigon-lib/kv"
 	"github.com/ledgerwatch/erigon-lib/kv/kvcache"
+	"github.com/ledgerwatch/erigon-lib/kv/kvcfg"
 	libstate "github.com/ledgerwatch/erigon-lib/state"
 	"github.com/ledgerwatch/log/v3"
 
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/common/hexutil"
 	"github.com/ledgerwatch/erigon/common/math"
+	"github.com/ledgerwatch/erigon/consensus"
 	"github.com/ledgerwatch/erigon/consensus/misc"
 	"github.com/ledgerwatch/erigon/core/rawdb"
 	"github.com/ledgerwatch/erigon/core/types"
@@ -109,12 +111,13 @@ type BaseAPI struct {
 
 	_blockReader services.FullBlockReader
 	_txnReader   services.TxnReader
-	_agg         *libstate.Aggregator22
+	_agg         *libstate.AggregatorV3
+	_engine      consensus.EngineReader
 
 	evmCallTimeout time.Duration
 }
 
-func NewBaseApi(f *rpchelper.Filters, stateCache kvcache.Cache, blockReader services.FullBlockReader, agg *libstate.Aggregator22, singleNodeMode bool, evmCallTimeout time.Duration) *BaseAPI {
+func NewBaseApi(f *rpchelper.Filters, stateCache kvcache.Cache, blockReader services.FullBlockReader, agg *libstate.AggregatorV3, singleNodeMode bool, evmCallTimeout time.Duration, engine consensus.EngineReader) *BaseAPI {
 	blocksLRUSize := 128 // ~32Mb
 	if !singleNodeMode {
 		blocksLRUSize = 512
@@ -124,12 +127,16 @@ func NewBaseApi(f *rpchelper.Filters, stateCache kvcache.Cache, blockReader serv
 		panic(err)
 	}
 
-	return &BaseAPI{filters: f, stateCache: stateCache, blocksLRU: blocksLRU, _blockReader: blockReader, _txnReader: blockReader, _agg: agg, evmCallTimeout: evmCallTimeout}
+	return &BaseAPI{filters: f, stateCache: stateCache, blocksLRU: blocksLRU, _blockReader: blockReader, _txnReader: blockReader, _agg: agg, evmCallTimeout: evmCallTimeout, _engine: engine}
 }
 
 func (api *BaseAPI) chainConfig(tx kv.Tx) (*params.ChainConfig, error) {
 	cfg, _, err := api.chainConfigWithGenesis(tx)
 	return cfg, err
+}
+
+func (api *BaseAPI) engine() consensus.EngineReader {
+	return api._engine
 }
 
 // nolint:unused
@@ -149,6 +156,7 @@ func (api *BaseAPI) blockByNumberWithSenders(tx kv.Tx, number uint64) (*types.Bl
 	}
 	return api.blockWithSenders(tx, hash, number)
 }
+
 func (api *BaseAPI) blockByHashWithSenders(tx kv.Tx, hash common.Hash) (*types.Block, error) {
 	if api.blocksLRU != nil {
 		if it, ok := api.blocksLRU.Get(hash); ok && it != nil {
@@ -162,6 +170,7 @@ func (api *BaseAPI) blockByHashWithSenders(tx kv.Tx, hash common.Hash) (*types.B
 
 	return api.blockWithSenders(tx, hash, *number)
 }
+
 func (api *BaseAPI) blockWithSenders(tx kv.Tx, hash common.Hash, number uint64) (*types.Block, error) {
 	if api.blocksLRU != nil {
 		if it, ok := api.blocksLRU.Get(hash); ok && it != nil {
@@ -199,7 +208,7 @@ func (api *BaseAPI) historyV3(tx kv.Tx) bool {
 	if historyV3 != nil {
 		return *historyV3
 	}
-	enabled, err := rawdb.HistoryV3.Enabled(tx)
+	enabled, err := kvcfg.HistoryV3.Enabled(tx)
 	if err != nil {
 		log.Warn("HisoryV2Enabled: read", "err", err)
 		return false
@@ -374,7 +383,7 @@ func newRPCTransaction(tx types.Transaction, blockHash common.Hash, blockNumber 
 
 // newRPCBorTransaction returns a Bor transaction that will serialize to the RPC
 // representation, with the given location metadata set (if available).
-func newRPCBorTransaction(opaqueTx types.Transaction, txHash common.Hash, blockHash common.Hash, blockNumber uint64, index uint64, baseFee *big.Int) *RPCTransaction {
+func newRPCBorTransaction(opaqueTx types.Transaction, txHash common.Hash, blockHash common.Hash, blockNumber uint64, index uint64, baseFee *big.Int, chainId *big.Int) *RPCTransaction {
 	tx := opaqueTx.(*types.LegacyTx)
 	result := &RPCTransaction{
 		Type:     hexutil.Uint64(tx.Type()),
@@ -387,8 +396,12 @@ func newRPCBorTransaction(opaqueTx types.Transaction, txHash common.Hash, blockH
 		From:     common.Address{},
 		To:       tx.GetTo(),
 		Value:    (*hexutil.Big)(tx.GetValue().ToBig()),
+		V:        (*hexutil.Big)(big.NewInt(0)),
+		R:        (*hexutil.Big)(big.NewInt(0)),
+		S:        (*hexutil.Big)(big.NewInt(0)),
 	}
 	if blockHash != (common.Hash{}) {
+		result.ChainID = (*hexutil.Big)(new(big.Int).SetUint64(chainId.Uint64()))
 		result.BlockHash = &blockHash
 		result.BlockNumber = (*hexutil.Big)(new(big.Int).SetUint64(blockNumber))
 		result.TransactionIndex = (*hexutil.Uint64)(&index)

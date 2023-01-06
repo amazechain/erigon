@@ -106,7 +106,7 @@ func (api *OtterscanAPIImpl) getTransactionByHash(ctx context.Context, tx kv.Tx,
 	return txn, block, blockHash, blockNum, txnIndex, nil
 }
 
-func (api *OtterscanAPIImpl) runTracer(ctx context.Context, tx kv.Tx, hash common.Hash, tracer vm.Tracer) (*core.ExecutionResult, error) {
+func (api *OtterscanAPIImpl) runTracer(ctx context.Context, tx kv.Tx, hash common.Hash, tracer vm.EVMLogger) (*core.ExecutionResult, error) {
 	txn, block, _, _, txIndex, err := api.getTransactionByHash(ctx, tx, hash)
 	if err != nil {
 		return nil, err
@@ -119,8 +119,9 @@ func (api *OtterscanAPIImpl) runTracer(ctx context.Context, tx kv.Tx, hash commo
 	if err != nil {
 		return nil, err
 	}
+	engine := api.engine()
 
-	msg, blockCtx, txCtx, ibs, _, err := transactions.ComputeTxEnv(ctx, block, chainConfig, api._blockReader, tx, txIndex, api._agg, api.historyV3(tx))
+	msg, blockCtx, txCtx, ibs, _, err := transactions.ComputeTxEnv(ctx, engine, block, chainConfig, api._blockReader, tx, txIndex, api._agg, api.historyV3(tx))
 	if err != nil {
 		return nil, err
 	}

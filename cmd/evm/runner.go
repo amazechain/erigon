@@ -30,7 +30,7 @@ import (
 	"time"
 
 	"github.com/holiman/uint256"
-	common2 "github.com/ledgerwatch/erigon-lib/common"
+	common2 "github.com/ledgerwatch/erigon-lib/common/dbg"
 	"github.com/ledgerwatch/erigon-lib/kv/memdb"
 	"github.com/ledgerwatch/log/v3"
 	"github.com/urfave/cli/v2"
@@ -42,6 +42,7 @@ import (
 	"github.com/ledgerwatch/erigon/core/state"
 	"github.com/ledgerwatch/erigon/core/vm"
 	"github.com/ledgerwatch/erigon/core/vm/runtime"
+	"github.com/ledgerwatch/erigon/eth/tracers/logger"
 	"github.com/ledgerwatch/erigon/params"
 )
 
@@ -117,7 +118,7 @@ func runCmd(ctx *cli.Context) error {
 	//glogger := log.NewGlogHandler(log.StreamHandler(os.Stderr, log.TerminalFormat(false)))
 	//glogger.Verbosity(log.Lvl(ctx.GlobalInt(VerbosityFlag.Name)))
 	//log.Root().SetHandler(glogger)
-	logconfig := &vm.LogConfig{
+	logconfig := &logger.LogConfig{
 		DisableMemory:     ctx.Bool(DisableMemoryFlag.Name),
 		DisableStack:      ctx.Bool(DisableStackFlag.Name),
 		DisableStorage:    ctx.Bool(DisableStorageFlag.Name),
@@ -126,8 +127,8 @@ func runCmd(ctx *cli.Context) error {
 	}
 
 	var (
-		tracer        vm.Tracer
-		debugLogger   *vm.StructLogger
+		tracer        vm.EVMLogger
+		debugLogger   *logger.StructLogger
 		statedb       *state.IntraBlockState
 		chainConfig   *params.ChainConfig
 		sender        = common.BytesToAddress([]byte("sender"))
@@ -135,12 +136,12 @@ func runCmd(ctx *cli.Context) error {
 		genesisConfig *core.Genesis
 	)
 	if ctx.Bool(MachineFlag.Name) {
-		tracer = vm.NewJSONLogger(logconfig, os.Stdout)
+		tracer = logger.NewJSONLogger(logconfig, os.Stdout)
 	} else if ctx.Bool(DebugFlag.Name) {
-		debugLogger = vm.NewStructLogger(logconfig)
+		debugLogger = logger.NewStructLogger(logconfig)
 		tracer = debugLogger
 	} else {
-		debugLogger = vm.NewStructLogger(logconfig)
+		debugLogger = logger.NewStructLogger(logconfig)
 	}
 	db := memdb.New()
 	if ctx.String(GenesisFlag.Name) != "" {
@@ -216,11 +217,12 @@ func runCmd(ctx *cli.Context) error {
 		initialGas = genesisConfig.GasLimit
 	}
 	value, _ := uint256.FromBig(utils.BigFlagValue(ctx, ValueFlag.Name))
+	gasPrice, _ := uint256.FromBig(utils.BigFlagValue(ctx, PriceFlag.Name))
 	runtimeConfig := runtime.Config{
 		Origin:      sender,
 		State:       statedb,
 		GasLimit:    initialGas,
-		GasPrice:    utils.BigFlagValue(ctx, PriceFlag.Name),
+		GasPrice:    gasPrice,
 		Value:       value,
 		Difficulty:  genesisConfig.Difficulty,
 		Time:        new(big.Int).SetUint64(genesisConfig.Timestamp),
@@ -285,7 +287,7 @@ func runCmd(ctx *cli.Context) error {
 	if ctx.Bool(DumpFlag.Name) {
 		rules := &params.Rules{}
 		if chainConfig != nil {
-			rules = chainConfig.Rules(runtimeConfig.BlockNumber.Uint64())
+			rules = chainConfig.Rules(runtimeConfig.BlockNumber.Uint64(), runtimeConfig.Time.Uint64())
 		}
 		if err = statedb.CommitBlock(rules, state.NewNoopWriter()); err != nil {
 			fmt.Println("Could not commit state: ", err)
@@ -316,13 +318,13 @@ func runCmd(ctx *cli.Context) error {
 			if printErr != nil {
 				log.Warn("Failed to print to stderr", "err", printErr)
 			}
-			vm.WriteTrace(os.Stderr, debugLogger.StructLogs())
+			logger.WriteTrace(os.Stderr, debugLogger.StructLogs())
 		}
 		_, printErr := fmt.Fprintln(os.Stderr, "#### LOGS ####")
 		if printErr != nil {
 			log.Warn("Failed to print to stderr", "err", printErr)
 		}
-		vm.WriteLogs(os.Stderr, statedb.Logs())
+		logger.WriteLogs(os.Stderr, statedb.Logs())
 	}
 
 	if bench || ctx.Bool(StatDumpFlag.Name) {

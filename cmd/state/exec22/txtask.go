@@ -22,6 +22,7 @@ type TxTask struct {
 	Txs             types.Transactions
 	Uncles          []*types.Header
 	Coinbase        common.Address
+	Withdrawals     types.Withdrawals
 	BlockHash       common.Hash
 	Sender          *common.Address
 	SkipAnalysis    bool
@@ -67,9 +68,12 @@ func (h *TxTaskQueue) Push(a interface{}) {
 }
 
 func (h *TxTaskQueue) Pop() interface{} {
-	c := *h
-	*h = c[:len(c)-1]
-	return c[len(c)-1]
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	old[n-1] = nil
+	*h = old[:n-1]
+	return x
 }
 
 // KvList sort.Interface to sort write list by keys
