@@ -15,10 +15,10 @@ package utils
 
 import (
 	"encoding/binary"
+	"math/bits"
 
 	"github.com/golang/snappy"
-	"github.com/klauspost/compress/zstd"
-	ssz "github.com/prysmaticlabs/fastssz"
+	"github.com/ledgerwatch/erigon/cl/cltypes/ssz"
 )
 
 func Uint32ToBytes4(n uint32) (ret [4]byte) {
@@ -57,8 +57,11 @@ func CompressSnappy(data []byte) []byte {
 }
 
 func EncodeSSZSnappy(data ssz.Marshaler) ([]byte, error) {
-	enc := make([]byte, data.SizeSSZ())
-	enc, err := data.MarshalSSZTo(enc[:0])
+	var (
+		enc = make([]byte, 0, data.EncodingSizeSSZ())
+		err error
+	)
+	enc, err = data.EncodeSSZ(enc)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +75,7 @@ func DecodeSSZSnappy(dst ssz.Unmarshaler, src []byte) error {
 		return err
 	}
 
-	err = dst.UnmarshalSSZ(dec)
+	err = dst.DecodeSSZ(dec)
 	if err != nil {
 		return err
 	}
@@ -80,18 +83,46 @@ func DecodeSSZSnappy(dst ssz.Unmarshaler, src []byte) error {
 	return nil
 }
 
-func CompressZstd(b []byte) []byte {
-	wr, err := zstd.NewWriter(nil)
+func DecodeSSZSnappyWithVersion(dst ssz.Unmarshaler, src []byte, version int) error {
+	dec, err := snappy.Decode(nil, src)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	return wr.EncodeAll(b, nil)
+
+	err = dst.DecodeSSZWithVersion(dec, version)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func DecompressZstd(b []byte) ([]byte, error) {
-	r, err := zstd.NewReader(nil)
-	if err != nil {
-		panic(err)
+// Check if it is sorted and check if there are duplicates. O(N) complexity.
+func IsSliceSortedSet(vals []uint64) bool {
+	for i := 0; i < len(vals)-1; i++ {
+		if vals[i] >= vals[i+1] {
+			return false
+		}
 	}
-	return r.DecodeAll(b, nil)
+	return true
+}
+
+// getBitlistLength return the amount of bits in given bitlist.
+func GetBitlistLength(b []byte) int {
+	if len(b) == 0 {
+		return 0
+	}
+	// The most significant bit is present in the last byte in the array.
+	last := b[len(b)-1]
+
+	// Determine the position of the most significant bit.
+	msb := bits.Len8(last)
+	if msb == 0 {
+		return 0
+	}
+
+	// The absolute position of the most significant bit will be the number of
+	// bits in the preceding bytes plus the position of the most significant
+	// bit. Subtract this value by 1 to determine the length of the bitlist.
+	return 8*(len(b)-1) + msb - 1
 }

@@ -7,7 +7,8 @@ import (
 	"sync"
 
 	"github.com/holiman/uint256"
-	"github.com/ledgerwatch/erigon/common"
+	libcommon "github.com/ledgerwatch/erigon-lib/common"
+
 	"github.com/ledgerwatch/erigon/crypto"
 	"github.com/ledgerwatch/erigon/rlp"
 )
@@ -19,8 +20,8 @@ type Account struct {
 	Initialised bool
 	Nonce       uint64
 	Balance     uint256.Int
-	Root        common.Hash // merkle root of the storage trie
-	CodeHash    common.Hash // hash of the bytecode
+	Root        libcommon.Hash // merkle root of the storage trie
+	CodeHash    libcommon.Hash // hash of the bytecode
 	Incarnation uint64
 }
 
@@ -34,7 +35,7 @@ const (
 )
 
 var emptyCodeHash = crypto.Keccak256Hash(nil)
-var emptyRoot = common.HexToHash("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
+var emptyRoot = libcommon.HexToHash("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
 
 // NewAccount creates a new account w/o code nor storage.
 func NewAccount() Account {
@@ -586,12 +587,12 @@ func (a *Account) IsEmptyCodeHash() bool {
 	return IsEmptyCodeHash(a.CodeHash)
 }
 
-func IsEmptyCodeHash(codeHash common.Hash) bool {
-	return codeHash == emptyCodeHash || codeHash == (common.Hash{})
+func IsEmptyCodeHash(codeHash libcommon.Hash) bool {
+	return codeHash == emptyCodeHash || codeHash == (libcommon.Hash{})
 }
 
 func (a *Account) IsEmptyRoot() bool {
-	return a.Root == emptyRoot || a.Root == common.Hash{}
+	return a.Root == emptyRoot || a.Root == libcommon.Hash{}
 }
 
 func (a *Account) GetIncarnation() uint64 {
@@ -716,4 +717,70 @@ func SerialiseV3(a *Account) []byte {
 		}
 	}
 	return value
+}
+
+func SerialiseV3Len(a *Account) (l int) {
+	l++
+	if a.Nonce > 0 {
+		l += (bits.Len64(a.Nonce) + 7) / 8
+	}
+	l++
+	if !a.Balance.IsZero() {
+		l += a.Balance.ByteLen()
+	}
+	l++
+	if !a.IsEmptyCodeHash() {
+		l += 32
+	}
+	l++
+	if a.Incarnation > 0 {
+		l += (bits.Len64(a.Incarnation) + 7) / 8
+	}
+	return l
+}
+func SerialiseV3To(a *Account, value []byte) {
+	pos := 0
+	if a.Nonce == 0 {
+		value[pos] = 0
+		pos++
+	} else {
+		nonceBytes := (bits.Len64(a.Nonce) + 7) / 8
+		value[pos] = byte(nonceBytes)
+		var nonce = a.Nonce
+		for i := nonceBytes; i > 0; i-- {
+			value[pos+i] = byte(nonce)
+			nonce >>= 8
+		}
+		pos += nonceBytes + 1
+	}
+	if a.Balance.IsZero() {
+		value[pos] = 0
+		pos++
+	} else {
+		balanceBytes := a.Balance.ByteLen()
+		value[pos] = byte(balanceBytes)
+		pos++
+		a.Balance.WriteToSlice(value[pos : pos+balanceBytes])
+		pos += balanceBytes
+	}
+	if a.IsEmptyCodeHash() {
+		value[pos] = 0
+		pos++
+	} else {
+		value[pos] = 32
+		pos++
+		copy(value[pos:pos+32], a.CodeHash[:])
+		pos += 32
+	}
+	if a.Incarnation == 0 {
+		value[pos] = 0
+	} else {
+		incBytes := (bits.Len64(a.Incarnation) + 7) / 8
+		value[pos] = byte(incBytes)
+		var inc = a.Incarnation
+		for i := incBytes; i > 0; i-- {
+			value[pos+i] = byte(inc)
+			inc >>= 8
+		}
+	}
 }

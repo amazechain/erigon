@@ -25,7 +25,7 @@ import (
 
 type (
 	executionFunc func(pc *uint64, interpreter *EVMInterpreter, callContext *ScopeContext) ([]byte, error)
-	gasFunc       func(*EVM, *Contract, *stack.Stack, *Memory, uint64) (uint64, error) // last parameter is the requested memory size as a uint64
+	gasFunc       func(VMInterpreter, *Contract, *stack.Stack, *Memory, uint64) (uint64, error) // last parameter is the requested memory size as a uint64
 	// memorySizeFunc returns the required size, and whether the operation overflowed a uint64
 	memorySizeFunc func(*stack.Stack) (size uint64, overflow bool)
 )
@@ -62,6 +62,7 @@ var (
 	londonInstructionSet           = newLondonInstructionSet()
 	shanghaiInstructionSet         = newShanghaiInstructionSet()
 	cancunInstructionSet           = newCancunInstructionSet()
+	pragueInstructionSet           = newPragueInstructionSet()
 )
 
 // JumpTable contains the EVM opcodes supported at a given fork.
@@ -83,6 +84,15 @@ func validateAndFillMaxStack(jt *JumpTable) {
 		}
 		op.maxStack = maxStack(op.numPop, op.numPush)
 	}
+}
+
+// newPragueInstructionSet returns the frontier, homestead, byzantium,
+// constantinople, istanbul, petersburg, berlin, london, paris, shanghai,
+// cancun, and prague instructions.
+func newPragueInstructionSet() JumpTable {
+	instructionSet := newCancunInstructionSet()
+	validateAndFillMaxStack(&instructionSet)
+	return instructionSet
 }
 
 // newCancunInstructionSet returns the frontier, homestead, byzantium,

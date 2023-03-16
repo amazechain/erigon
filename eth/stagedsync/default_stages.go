@@ -5,10 +5,9 @@ import (
 
 	"github.com/ledgerwatch/erigon-lib/kv"
 	"github.com/ledgerwatch/erigon/eth/stagedsync/stages"
-	"github.com/ledgerwatch/erigon/ethdb/prune"
 )
 
-func DefaultStages(ctx context.Context, sm prune.Mode, snapshots SnapshotsCfg, headers HeadersCfg, cumulativeIndex CumulativeIndexCfg, blockHashCfg BlockHashesCfg, bodies BodiesCfg, issuance IssuanceCfg, senders SendersCfg, exec ExecuteBlockCfg, hashState HashStateCfg, trieCfg TrieCfg, history HistoryCfg, logIndex LogIndexCfg, callTraces CallTracesCfg, txLookup TxLookupCfg, finish FinishCfg, test bool) []*Stage {
+func DefaultStages(ctx context.Context, snapshots SnapshotsCfg, headers HeadersCfg, cumulativeIndex CumulativeIndexCfg, blockHashCfg BlockHashesCfg, bodies BodiesCfg, senders SendersCfg, exec ExecuteBlockCfg, hashState HashStateCfg, trieCfg TrieCfg, history HistoryCfg, logIndex LogIndexCfg, callTraces CallTracesCfg, txLookup TxLookupCfg, finish FinishCfg, test bool) []*Stage {
 	return []*Stage{
 		{
 			ID:          stages.Snapshots,
@@ -72,7 +71,7 @@ func DefaultStages(ctx context.Context, sm prune.Mode, snapshots SnapshotsCfg, h
 			ID:          stages.Bodies,
 			Description: "Download block bodies",
 			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, quiet bool) error {
-				return BodiesForward(s, u, ctx, tx, bodies, test, firstCycle)
+				return BodiesForward(s, u, ctx, tx, bodies, test, firstCycle, quiet)
 			},
 			Unwind: func(firstCycle bool, u *UnwindState, s *StageState, tx kv.RwTx) error {
 				return UnwindBodiesStage(u, tx, bodies, ctx)
@@ -124,7 +123,7 @@ func DefaultStages(ctx context.Context, sm prune.Mode, snapshots SnapshotsCfg, h
 			ID:          stages.IntermediateHashes,
 			Description: "Generate intermediate hashes and computing state root",
 			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, quiet bool) error {
-				if exec.chainConfig.IsCancun(0) {
+				if exec.chainConfig.IsPrague(0) {
 					_, err := SpawnVerkleTrie(s, u, tx, trieCfg, ctx)
 					return err
 				}
@@ -132,7 +131,7 @@ func DefaultStages(ctx context.Context, sm prune.Mode, snapshots SnapshotsCfg, h
 				return err
 			},
 			Unwind: func(firstCycle bool, u *UnwindState, s *StageState, tx kv.RwTx) error {
-				if exec.chainConfig.IsCancun(0) {
+				if exec.chainConfig.IsPrague(0) {
 					return UnwindVerkleTrie(u, s, tx, trieCfg, ctx)
 				}
 				return UnwindIntermediateHashesStage(u, s, tx, trieCfg, ctx)
@@ -212,19 +211,6 @@ func DefaultStages(ctx context.Context, sm prune.Mode, snapshots SnapshotsCfg, h
 			},
 		},
 		{
-			ID:          stages.Issuance,
-			Description: "Issuance computation",
-			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, quiet bool) error {
-				return SpawnStageIssuance(issuance, s, tx, ctx)
-			},
-			Unwind: func(firstCycle bool, u *UnwindState, s *StageState, tx kv.RwTx) error {
-				return UnwindIssuanceStage(u, issuance, tx, ctx)
-			},
-			Prune: func(firstCycle bool, p *PruneState, tx kv.RwTx) error {
-				return PruneIssuanceStage(p, issuance, tx, ctx)
-			},
-		},
-		{
 			ID:          stages.Finish,
 			Description: "Final: update current block for the RPC API",
 			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, _ Unwinder, tx kv.RwTx, quiet bool) error {
@@ -240,7 +226,7 @@ func DefaultStages(ctx context.Context, sm prune.Mode, snapshots SnapshotsCfg, h
 	}
 }
 
-// StateStages are all stages necessary for basic unwind and stage computation, it is primarly used to process side forks and memory execution.
+// StateStages are all stages necessary for basic unwind and stage computation, it is primarily used to process side forks and memory execution.
 func StateStages(ctx context.Context, headers HeadersCfg, bodies BodiesCfg, blockHashCfg BlockHashesCfg, senders SendersCfg, exec ExecuteBlockCfg, hashState HashStateCfg, trieCfg TrieCfg) []*Stage {
 	return []*Stage{
 		{
@@ -257,7 +243,7 @@ func StateStages(ctx context.Context, headers HeadersCfg, bodies BodiesCfg, bloc
 			ID:          stages.Bodies,
 			Description: "Download block bodies",
 			Forward: func(firstCycle bool, badBlockUnwind bool, s *StageState, u Unwinder, tx kv.RwTx, quiet bool) error {
-				return BodiesForward(s, u, ctx, tx, bodies, false, false)
+				return BodiesForward(s, u, ctx, tx, bodies, false, false, quiet)
 			},
 			Unwind: func(firstCycle bool, u *UnwindState, s *StageState, tx kv.RwTx) error {
 				return UnwindBodiesStage(u, tx, bodies, ctx)

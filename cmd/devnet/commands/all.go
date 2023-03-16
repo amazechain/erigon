@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ledgerwatch/erigon/cmd/devnet/models"
+	"github.com/ledgerwatch/erigon/cmd/devnet/services"
 )
 
 // ExecuteAllMethods runs all the simulation tests for erigon devnet
@@ -21,7 +22,7 @@ func ExecuteAllMethods() {
 
 	// confirm that the txpool is empty
 	fmt.Println("CONFIRMING TXPOOL IS EMPTY BEFORE SENDING TRANSACTION...")
-	checkTxPoolContent(0, 0)
+	services.CheckTxPoolContent(0, 0)
 	fmt.Println()
 
 	/*
@@ -31,33 +32,31 @@ func ExecuteAllMethods() {
 	 */
 
 	// send a token from the dev address to the recipient address
-	//nonContractHash, err := callSendTx(sendValue, recipientAddress, models.DevAddress)
+	//_, err := callSendTx(sendValue, recipientAddress, models.DevAddress)
 	//if err != nil {
 	//	fmt.Printf("callSendTx error: %v\n", err)
 	//	return
 	//}
 	//fmt.Println()
 
-	//// confirm that the txpool has this transaction in the pending queue
-	//fmt.Println("CONFIRMING TXPOOL HAS THE LATEST TRANSACTION...")
-	//checkTxPoolContent(1, 0)
-	//fmt.Println()
-	//
-	//// look for the transaction hash in the newly mined block
-	//fmt.Println("LOOKING FOR TRANSACTION IN THE LATEST BLOCK...")
-	//callSubscribeToNewHeads(*nonContractHash)
-	//fmt.Println()
-
-	// initiate a contract transaction
-	fmt.Println("INITIATING A CONTRACT TRANSACTION...")
-	_, err := callContractTx()
+	// USING DYNAMIC FEE
+	// send a token from the dev address to the recipient address
+	_, err := callSendTxWithDynamicFee(recipientAddress, models.DevAddress)
 	if err != nil {
-		fmt.Printf("callContractTx error: %v\n", err)
+		fmt.Printf("callSendTxWithDynamicFee error: %v\n", err)
 		return
 	}
 	fmt.Println()
 
-	// confirm that the transaction has been moved from the pending queue and the txpool is empty once again
-	fmt.Println("CONFIRMING TXPOOL IS EMPTY ONCE AGAIN...")
-	checkTxPoolContent(0, 0)
+	// initiate a contract transaction
+	//fmt.Println("INITIATING A CONTRACT TRANSACTION...")
+	//_, err := callContractTx()
+	//if err != nil {
+	//	fmt.Printf("callContractTx error: %v\n", err)
+	//	return
+	//}
+	//fmt.Println()
+
+	fmt.Print("SEND SIGNAL TO QUIT ALL RUNNING NODES")
+	models.QuitNodeChan <- true
 }

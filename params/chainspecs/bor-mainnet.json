@@ -3,9 +3,7 @@
   "chainId": 137,
   "consensus": "bor",
   "homesteadBlock": 0,
-  "daoForkSupport": true,
   "eip150Block": 0,
-  "eip150Hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
   "eip155Block": 0,
   "byzantiumBlock": 0,
   "constantinopleBlock": 0,
@@ -21,10 +19,12 @@
       "0": 2
     },
     "producerDelay": {
-      "0": 6
+      "0": 6,
+      "38189056": 4
     },
     "sprint": {
-      "0": 64
+      "0": 64,
+      "38189056": 16
     },
     "backupMultiplier": {
       "0": 2
@@ -50,6 +50,8 @@
         }
       }
     },
-    "jaipurBlock": 23850000
+    "calcuttaBlock": 22156660,
+    "jaipurBlock": 23850000,
+    "delhiBlock": 38189056
   }
 }

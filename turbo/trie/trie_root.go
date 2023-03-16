@@ -11,12 +11,13 @@ import (
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	length2 "github.com/ledgerwatch/erigon-lib/common/length"
 	"github.com/ledgerwatch/erigon-lib/kv"
+	"github.com/ledgerwatch/log/v3"
+
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/common/dbutils"
 	"github.com/ledgerwatch/erigon/common/hexutil"
 	"github.com/ledgerwatch/erigon/core/types/accounts"
 	"github.com/ledgerwatch/erigon/turbo/rlphacks"
-	"github.com/ledgerwatch/log/v3"
 )
 
 /*
@@ -92,6 +93,9 @@ type FlatDBTrieLoader struct {
 	defaultReceiver *RootHashAggregator
 	hc              HashCollector2
 	shc             StorageHashCollector2
+
+	// Optionally construct an Account Proof for an account key specified in 'rd'
+	accProofResult *accounts.AccProofResult
 }
 
 // RootHashAggregator - calculates Merkle trie root hash from incoming data stream
@@ -99,16 +103,16 @@ type RootHashAggregator struct {
 	trace          bool
 	wasIH          bool
 	wasIHStorage   bool
-	root           common.Hash
+	root           libcommon.Hash
 	hc             HashCollector2
 	shc            StorageHashCollector2
 	currStorage    bytes.Buffer // Current key for the structure generation algorithm, as well as the input tape for the hash builder
 	succStorage    bytes.Buffer
 	valueStorage   []byte // Current value to be used as the value tape for the hash builder
 	hadTreeStorage bool
-	hashAccount    common.Hash  // Current value to be used as the value tape for the hash builder
-	hashStorage    common.Hash  // Current value to be used as the value tape for the hash builder
-	curr           bytes.Buffer // Current key for the structure generation algorithm, as well as the input tape for the hash builder
+	hashAccount    libcommon.Hash // Current value to be used as the value tape for the hash builder
+	hashStorage    libcommon.Hash // Current value to be used as the value tape for the hash builder
+	curr           bytes.Buffer   // Current key for the structure generation algorithm, as well as the input tape for the hash builder
 	succ           bytes.Buffer
 	currAccK       []byte
 	value          []byte // Current value to be used as the value tape for the hash builder
@@ -124,6 +128,10 @@ type RootHashAggregator struct {
 	a              accounts.Account
 	leafData       GenStructStepLeafData
 	accData        GenStructStepAccountData
+
+	// Used to construct an Account proof while calculating the tree root.
+	proofMatch RetainDecider
+	cutoff     bool
 }
 
 type StreamReceiver interface {
@@ -139,7 +147,7 @@ type StreamReceiver interface {
 	) error
 
 	Result() SubTries
-	Root() common.Hash
+	Root() libcommon.Hash
 }
 
 func NewRootHashAggregator() *RootHashAggregator {
@@ -168,7 +176,14 @@ func (l *FlatDBTrieLoader) Reset(rd RetainDeciderWithMarker, hc HashCollector2, 
 		fmt.Printf("----------\n")
 		fmt.Printf("CalcTrieRoot\n")
 	}
+	l.accProofResult = nil
 	return nil
+}
+
+func (l *FlatDBTrieLoader) SetProofReturn(accProofResult *accounts.AccProofResult) {
+	l.accProofResult = accProofResult
+	l.defaultReceiver.proofMatch = l.rd
+	l.defaultReceiver.hb.SetProofReturn(accProofResult)
 }
 
 func (l *FlatDBTrieLoader) SetStreamReceiver(receiver StreamReceiver) {
@@ -197,7 +212,7 @@ func (l *FlatDBTrieLoader) SetStreamReceiver(receiver StreamReceiver) {
 //	   SkipAccounts:
 //			use(AccTrie)
 //		}
-func (l *FlatDBTrieLoader) CalcTrieRoot(tx kv.Tx, prefix []byte, quit <-chan struct{}) (common.Hash, error) {
+func (l *FlatDBTrieLoader) CalcTrieRoot(tx kv.Tx, prefix []byte, quit <-chan struct{}) (libcommon.Hash, error) {
 
 	accC, err := tx.Cursor(kv.HashedAccounts)
 	if err != nil {
@@ -345,9 +360,10 @@ func (r *RootHashAggregator) Reset(hc HashCollector2, shc StorageHashCollector2,
 	r.succStorage.Reset()
 	r.valueStorage = nil
 	r.wasIHStorage = false
-	r.root = common.Hash{}
+	r.root = libcommon.Hash{}
 	r.trace = trace
 	r.hb.trace = trace
+	r.proofMatch = nil
 }
 
 func (r *RootHashAggregator) Receive(itemType StreamItem,
@@ -481,6 +497,10 @@ func (r *RootHashAggregator) Receive(itemType StreamItem,
 				r.accData.FieldSet |= AccountFieldStorageOnly
 			}
 		}
+
+		// Used for optional GetProof calculation to trigger inclusion of the top-level node
+		r.cutoff = true
+
 		if r.curr.Len() > 0 {
 			if err := r.genStructAccount(); err != nil {
 				return err
@@ -528,7 +548,7 @@ func (r *RootHashAggregator) Result() SubTries {
 	panic("don't call me")
 }
 
-func (r *RootHashAggregator) Root() common.Hash {
+func (r *RootHashAggregator) Root() libcommon.Hash {
 	return r.root
 }
 
@@ -633,14 +653,21 @@ func (r *RootHashAggregator) genStructAccount() error {
 	r.currStorage.Reset()
 	r.succStorage.Reset()
 	var err error
-	if r.groups, r.hasTree, r.hasHash, err = GenStructStep(r.RetainNothing, r.curr.Bytes(), r.succ.Bytes(), r.hb, func(keyHex []byte, hasState, hasTree, hasHash uint16, hashes, rootHash []byte) error {
+
+	var wantProof func(_ []byte) bool
+	if r.proofMatch != nil {
+		wantProof = r.proofMatch.Retain
+	}
+	if r.groups, r.hasTree, r.hasHash, err = GenStructStepEx(r.RetainNothing, r.curr.Bytes(), r.succ.Bytes(), r.hb, func(keyHex []byte, hasState, hasTree, hasHash uint16, hashes, rootHash []byte) error {
 		if r.hc == nil {
 			return nil
 		}
 		return r.hc(keyHex, hasState, hasTree, hasHash, hashes, rootHash)
 	}, data, r.groups, r.hasTree, r.hasHash,
-		false,
-		//r.trace,
+		//false,
+		r.trace,
+		wantProof,
+		r.cutoff,
 	); err != nil {
 		return err
 	}
@@ -1417,13 +1444,13 @@ func keyIsBefore(k1, k2 []byte) bool {
 	return bytes.Compare(k1, k2) < 0
 }
 
-func UnmarshalTrieNodeTyped(v []byte) (hasState, hasTree, hasHash uint16, hashes []common.Hash, rootHash common.Hash) {
+func UnmarshalTrieNodeTyped(v []byte) (hasState, hasTree, hasHash uint16, hashes []libcommon.Hash, rootHash libcommon.Hash) {
 	hasState, hasTree, hasHash, v = binary.BigEndian.Uint16(v), binary.BigEndian.Uint16(v[2:]), binary.BigEndian.Uint16(v[4:]), v[6:]
 	if bits.OnesCount16(hasHash)+1 == len(v)/length2.Hash {
 		rootHash.SetBytes(common.CopyBytes(v[:32]))
 		v = v[32:]
 	}
-	hashes = make([]common.Hash, len(v)/length2.Hash)
+	hashes = make([]libcommon.Hash, len(v)/length2.Hash)
 	for i := 0; i < len(hashes); i++ {
 		hashes[i].SetBytes(common.CopyBytes(v[i*length2.Hash : (i+1)*length2.Hash]))
 	}
@@ -1439,7 +1466,7 @@ func UnmarshalTrieNode(v []byte) (hasState, hasTree, hasHash uint16, hashes, roo
 	return
 }
 
-func MarshalTrieNodeTyped(hasState, hasTree, hasHash uint16, h []common.Hash, buf []byte) []byte {
+func MarshalTrieNodeTyped(hasState, hasTree, hasHash uint16, h []libcommon.Hash, buf []byte) []byte {
 	buf = buf[:6+len(h)*length2.Hash]
 	meta, hashes := buf[:6], buf[6:]
 	binary.BigEndian.PutUint16(meta, hasState)
@@ -1470,8 +1497,8 @@ func MarshalTrieNode(hasState, hasTree, hasHash uint16, hashes, rootHash []byte,
 	return buf
 }
 
-func CastTrieNodeValue(hashes, rootHash []byte) []common.Hash {
-	to := make([]common.Hash, len(hashes)/length2.Hash+len(rootHash)/length2.Hash)
+func CastTrieNodeValue(hashes, rootHash []byte) []libcommon.Hash {
+	to := make([]libcommon.Hash, len(hashes)/length2.Hash+len(rootHash)/length2.Hash)
 	i := 0
 	if len(rootHash) > 0 {
 		to[0].SetBytes(common.CopyBytes(rootHash))
@@ -1486,7 +1513,7 @@ func CastTrieNodeValue(hashes, rootHash []byte) []common.Hash {
 
 // CalcRoot is a combination of `ResolveStateTrie` and `UpdateStateTrie`
 // DESCRIBED: docs/programmers_guide/guide.md#organising-ethereum-state-into-a-merkle-tree
-func CalcRoot(logPrefix string, tx kv.Tx) (common.Hash, error) {
+func CalcRoot(logPrefix string, tx kv.Tx) (libcommon.Hash, error) {
 	loader := NewFlatDBTrieLoader(logPrefix)
 	if err := loader.Reset(NewRetainList(0), nil, nil, false); err != nil {
 		return EmptyRoot, err

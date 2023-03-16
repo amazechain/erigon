@@ -121,8 +121,9 @@ func nonMiningNodeArgs(nodeNumber int, enode string) []string {
 	staticPeers, _ := models.ParameterFromArgument(models.StaticPeersArg, enode)
 	consoleVerbosity, _ := models.ParameterFromArgument(models.ConsoleVerbosityArg, models.ConsoleVerbosityParam)
 	logDir, _ := models.ParameterFromArgument(models.LogDirArg, models.LogDirParam+"/node_2")
+	torrentPort, _ := models.ParameterFromArgument(models.TorrentPortArg, models.TorrentPortParam)
 
-	return []string{models.BuildDirArg, dataDir, chainType, privateApiAddr, staticPeers, models.NoDiscover, consoleVerbosity, logDir}
+	return []string{models.BuildDirArg, dataDir, chainType, privateApiAddr, staticPeers, models.NoDiscover, consoleVerbosity, logDir, torrentPort}
 }
 
 // getEnode returns the enode of the mining node
@@ -138,4 +139,15 @@ func getEnode() (string, error) {
 	}
 
 	return enode, nil
+}
+
+// QuitOnSignal stops the node goroutines after all checks have been made on the devnet
+func QuitOnSignal(wg *sync.WaitGroup) {
+	models.QuitNodeChan = make(chan bool)
+	go func() {
+		for <-models.QuitNodeChan {
+			wg.Done()
+			wg.Done()
+		}
+	}()
 }

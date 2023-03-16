@@ -18,10 +18,14 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"os"
 	"time"
 
+	libcommon "github.com/ledgerwatch/erigon-lib/common"
+	"gopkg.in/yaml.v2"
+
+	"github.com/ledgerwatch/erigon/cl/cltypes/ssz"
 	"github.com/ledgerwatch/erigon/cl/utils"
-	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/params/networkname"
 )
 
@@ -31,6 +35,8 @@ const (
 	MainnetNetwork NetworkType = 1
 	GoerliNetwork  NetworkType = 5
 	SepoliaNetwork NetworkType = 11155111
+	GnosisNetwork  NetworkType = 100
+	ChiadoNetwork  NetworkType = 10200
 )
 
 const (
@@ -38,7 +44,7 @@ const (
 	VersionLength  int           = 4
 	MaxChunkSize   uint64        = 1 << 20 // 1 MiB
 	ReqTimeout     time.Duration = 1 * time.Second
-	RespTimeout    time.Duration = 15 * time.Second
+	RespTimeout    time.Duration = 1 * time.Second
 )
 
 var (
@@ -77,6 +83,27 @@ var (
 		// Teku boot node
 		"enr:-Ly4QFoZTWR8ulxGVsWydTNGdwEESueIdj-wB6UmmjUcm-AOPxnQi7wprzwcdo7-1jBW_JxELlUKJdJES8TDsbl1EdNlh2F0dG5ldHOI__78_v2bsV-EZXRoMpA2-lATkAAAcf__________gmlkgnY0gmlwhBLYJjGJc2VjcDI1NmsxoQI0gujXac9rMAb48NtMqtSTyHIeNYlpjkbYpWJw46PmYYhzeW5jbmV0cw-DdGNwgiMog3VkcIIjKA",
 	}
+
+	GnosisBootstrapNodes = []string{
+		"enr:-Ly4QMU1y81COwm1VZgxGF4_eZ21ub9-GHF6dXZ29aEJ0oZpcV2Rysw-viaEKfpcpu9ZarILJLxFZjcKOjE0Sybs3MQBh2F0dG5ldHOIAAAAAAAAAACEZXRoMpCCS-QxAgAAZP__________gmlkgnY0gmlwhANLnx-Jc2VjcDI1NmsxoQKoaYT8I-wf2I_f_ii6EgoSSXj5T3bhiDyW-7ZLsY3T64hzeW5jbmV0cwCDdGNwgiMog3VkcIIjKA",
+		"enr:-Ly4QBf76jLiCA_pDXoZjhyRbuwzFOscFY-MIKkPnmHPQbvaKhIDZutfe38G9ibzgQP0RKrTo3vcWOy4hf_8wOZ-U5MBh2F0dG5ldHOIAAAAAAAAAACEZXRoMpCCS-QxAgAAZP__________gmlkgnY0gmlwhBLGgjaJc2VjcDI1NmsxoQLGeo0Q4lDvxIjHjnkAqEuETTaFIjsNrEcSpdDhcHXWFYhzeW5jbmV0cwCDdGNwgiMog3VkcIIjKA",
+		"enr:-Ly4QLjZUWdqUO_RwyDqCAccIK5-MbLRD6A2c7oBuVbBgBnWDkEf0UKJVAaJqi2pO101WVQQLYSnYgz1Q3pRhYdrlFoBh2F0dG5ldHOIAAAAAAAAAACEZXRoMpCCS-QxAgAAZP__________gmlkgnY0gmlwhANA8sSJc2VjcDI1NmsxoQK4TC_EK1jSs0VVPUpOjIo1rhJmff2SLBPFOWSXMwdLVYhzeW5jbmV0cwCDdGNwgiMog3VkcIIjKA",
+		"enr:-Ly4QKwX2rTFtKWKQHSGQFhquxsxL1jewO8JB1MG-jgHqAZVFWxnb3yMoQqnYSV1bk25-_jiLuhIulxar3RBWXEDm6EBh2F0dG5ldHOIAAAAAAAAAACEZXRoMpCCS-QxAgAAZP__________gmlkgnY0gmlwhAN-qZeJc2VjcDI1NmsxoQI7EPGMpecl0QofLp4Wy_lYNCCChUFEH6kY7k-oBGkPFIhzeW5jbmV0cwCDdGNwgiMog3VkcIIjKA",
+		"enr:-Ly4QPoChSQTleJROee1-k-4HOEgKqL9kLksE-tEiVqcY9kwF9V53aBg-MruD7Yx4Aks3LAeJpKXAS4ntMrIdqvQYc8Ch2F0dG5ldHOIAAAAAAAAAACEZXRoMpCCS-QxAgAAZP__________gmlkgnY0gmlwhGsWBHiJc2VjcDI1NmsxoQKwGQrwOSBJB_DtQOkFZVAY4YQfMAbUVxFpL5WgrzEddYhzeW5jbmV0cwCDdGNwgiMog3VkcIIjKA",
+		"enr:-Ly4QBbaKRSX4SncCOxTTL611Kxlz-zYFrIn-k_63jGIPK_wbvFghVUHJICPCxufgTX5h79jvgfPr-2hEEQEdziGQ5MCh2F0dG5ldHOIAAAAAAAAAACEZXRoMpCCS-QxAgAAZP__________gmlkgnY0gmlwhAMazo6Jc2VjcDI1NmsxoQKt-kbM9isuWp8djhyEq6-4MLv1Sy7dOXeMOMdPgwu9LohzeW5jbmV0cwCDdGNwgiMog3VkcIIjKA",
+		"enr:-Ly4QKJ5BzgFyJ6BaTlGY0C8ROzl508U3GA6qxdG5Gn2hxdke6nQO187pYlLvhp82Dez4PQn436Fts1F0WAm-_5l2LACh2F0dG5ldHOIAAAAAAAAAACEZXRoMpCCS-QxAgAAZP__________gmlkgnY0gmlwhA-YLVKJc2VjcDI1NmsxoQI8_Lvr6p_TkcAu8KorKacfUEnoOon0tdO0qWhriPdBP4hzeW5jbmV0cwCDdGNwgiMog3VkcIIjKA",
+		"enr:-Ly4QJMtoiX2bPnVbiQOJCLbtUlqdqZk7kCJQln_W1bp1vOHcxWowE-iMXkKC4_uOb0o73wAW71WYi80Dlsg-7a5wiICh2F0dG5ldHOIAAAAAAAAAACEZXRoMpCCS-QxAgAAZP__________gmlkgnY0gmlwhDbP3KmJc2VjcDI1NmsxoQNvcfKYUqcemLFlpKxl7JcQJwQ3L9unYL44gY2aEiRnI4hzeW5jbmV0cwCDdGNwgiMog3VkcIIjKA",
+	}
+	ChiadoBootstrapNodes = []string{
+		"enr:-L64QOijsdi9aVIawMb5h5PWueaPM9Ai6P17GNPFlHzz7MGJQ8tFMdYrEx8WQitNKLG924g2Q9cCdzg54M0UtKa3QIKCMxaHYXR0bmV0c4j__________4RldGgykDE2cEMCAABv__________-CaWSCdjSCaXCEi5AaWYlzZWNwMjU2azGhA8CjTkD4m1s8FbKCN18LgqlYcE65jrT148vFtwd9U62SiHN5bmNuZXRzD4N0Y3CCIyiDdWRwgiMo",
+		"enr:-L64QKYKGQj5ybkfBxyFU5IEVzP7oJkGHJlie4W8BCGAYEi4P0mmMksaasiYF789mVW_AxYVNVFUjg9CyzmdvpyWQ1KCMlmHYXR0bmV0c4j__________4RldGgykDE2cEMCAABv__________-CaWSCdjSCaXCEi5CtNolzZWNwMjU2azGhAuA7BAwIijy1z81AO9nz_MOukA1ER68rGA67PYQ5pF1qiHN5bmNuZXRzD4N0Y3CCIyiDdWRwgiMo",
+		"enr:-Ly4QJJUnV9BxP_rw2Bv7E9iyw4sYS2b4OQZIf4Mu_cA6FljJvOeSTQiCUpbZhZjR4R0VseBhdTzrLrlHrAuu_OeZqgJh2F0dG5ldHOI__________-EZXRoMpAxNnBDAgAAb___________gmlkgnY0gmlwhIuQGnOJc2VjcDI1NmsxoQPT_u3IjDtB2r-nveH5DhUmlM8F2IgLyxhmwmqW4L5k3ohzeW5jbmV0cw-DdGNwgiMog3VkcIIjKA",
+		"enr:-MK4QCkOyqOTPX1_-F-5XVFjPclDUc0fj3EeR8FJ5-hZjv6ARuGlFspM0DtioHn1r6YPUXkOg2g3x6EbeeKdsrvVBYmGAYQKrixeh2F0dG5ldHOIAAAAAAAAAACEZXRoMpAxNnBDAgAAb___________gmlkgnY0gmlwhIuQGlWJc2VjcDI1NmsxoQKdW3-DgLExBkpLGMRtuM88wW_gZkC7Yeg0stYDTrlynYhzeW5jbmV0cwCDdGNwgiMog3VkcIIjKA==",
+		"enr:-Ly4QLYLNqrjvSxD3lpAPBUNlxa6cIbe79JqLZLFcZZjWoCjZcw-85agLUErHiygG2weRSCLnd5V460qTbLbwJQsfZkoh2F0dG5ldHOI__________-EZXRoMpAxNnBDAgAAb___________gmlkgnY0gmlwhKq7mu-Jc2VjcDI1NmsxoQP900YAYa9kdvzlSKGjVo-F3XVzATjOYp3BsjLjSophO4hzeW5jbmV0cw-DdGNwgiMog3VkcIIjKA",
+		"enr:-Ly4QCGeYvTCNOGKi0mKRUd45rLj96b4pH98qG7B9TCUGXGpHZALtaL2-XfjASQyhbCqENccI4PGXVqYTIehNT9KJMQgh2F0dG5ldHOI__________-EZXRoMpAxNnBDAgAAb___________gmlkgnY0gmlwhIuQrVSJc2VjcDI1NmsxoQP9iDchx2PGl3JyJ29B9fhLCvVMN6n23pPAIIeFV-sHOIhzeW5jbmV0cw-DdGNwgiMog3VkcIIjKA",
+		"enr:-Ly4QAtr21x5Ps7HYhdZkIBRBgcBkvlIfEel1YNjtFWf4cV3au2LgBGICz9PtEs9-p2HUl_eME8m1WImxTxSB3AkCMwBh2F0dG5ldHOIAAAAAAAAAACEZXRoMpAxNnBDAgAAb___________gmlkgnY0gmlwhANHhOeJc2VjcDI1NmsxoQNLp1QPV8-pyMCohOtj6xGtSBM_GtVTqzlbvNsCF4ezkYhzeW5jbmV0cwCDdGNwgiMog3VkcIIjKA",
+		"enr:-Ly4QLgn8Bx6faigkKUGZQvd1HDToV2FAxZIiENK-lczruzQb90qJK-4E65ADly0s4__dQOW7IkLMW7ZAyJy2vtiLy8Bh2F0dG5ldHOIAAAAAAAAAACEZXRoMpAxNnBDAgAAb___________gmlkgnY0gmlwhANFIw2Jc2VjcDI1NmsxoQMa-fWEy9UJHfOl_lix3wdY5qust78sHAqZnWwEiyqKgYhzeW5jbmV0cwCDdGNwgiMog3VkcIIjKA",
+	}
 )
 
 type NetworkConfig struct {
@@ -101,11 +128,12 @@ type NetworkConfig struct {
 
 	ContractDeploymentBlock uint64 // the eth1 block in which the deposit contract is deployed.
 	BootNodes               []string
+	StaticPeers             []string
 }
 
 type GenesisConfig struct {
-	GenesisValidatorRoot common.Hash // Merkle Root at Genesis
-	GenesisTime          uint64      // Unix time at Genesis
+	GenesisValidatorRoot libcommon.Hash // Merkle Root at Genesis
+	GenesisTime          uint64         // Unix time at Genesis
 }
 
 var NetworkConfigs map[NetworkType]NetworkConfig = map[NetworkType]NetworkConfig{
@@ -168,27 +196,74 @@ var NetworkConfigs map[NetworkType]NetworkConfig = map[NetworkType]NetworkConfig
 		ContractDeploymentBlock:         4367322,
 		BootNodes:                       GoerliBootstrapNodes,
 	},
+
+	GnosisNetwork: {
+		GossipMaxSize:                   1 << 20, // 1 MiB
+		GossipMaxSizeBellatrix:          10485760,
+		MaxChunkSize:                    1 << 20, // 1 MiB
+		AttestationSubnetCount:          64,
+		AttestationPropagationSlotRange: 32,
+		MaxRequestBlocks:                1 << 10, // 1024
+		TtfbTimeout:                     ReqTimeout,
+		RespTimeout:                     RespTimeout,
+		MaximumGossipClockDisparity:     500 * time.Millisecond,
+		MessageDomainInvalidSnappy:      [4]byte{00, 00, 00, 00},
+		MessageDomainValidSnappy:        [4]byte{01, 00, 00, 00},
+		Eth2key:                         "eth2",
+		AttSubnetKey:                    "attnets",
+		SyncCommsSubnetKey:              "syncnets",
+		MinimumPeersInSubnetSearch:      20,
+		ContractDeploymentBlock:         19475089,
+		BootNodes:                       GnosisBootstrapNodes,
+	},
+
+	ChiadoNetwork: {
+		GossipMaxSize:                   1 << 20, // 1 MiB
+		GossipMaxSizeBellatrix:          10485760,
+		MaxChunkSize:                    1 << 20, // 1 MiB
+		AttestationSubnetCount:          64,
+		AttestationPropagationSlotRange: 32,
+		MaxRequestBlocks:                1 << 10, // 1024
+		TtfbTimeout:                     ReqTimeout,
+		RespTimeout:                     RespTimeout,
+		MaximumGossipClockDisparity:     500 * time.Millisecond,
+		MessageDomainInvalidSnappy:      [4]byte{00, 00, 00, 00},
+		MessageDomainValidSnappy:        [4]byte{01, 00, 00, 00},
+		Eth2key:                         "eth2",
+		AttSubnetKey:                    "attnets",
+		SyncCommsSubnetKey:              "syncnets",
+		MinimumPeersInSubnetSearch:      20,
+		ContractDeploymentBlock:         155530,
+		BootNodes:                       ChiadoBootstrapNodes,
+	},
 }
 
 var GenesisConfigs map[NetworkType]GenesisConfig = map[NetworkType]GenesisConfig{
 	MainnetNetwork: {
-		GenesisValidatorRoot: common.HexToHash("4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95"),
+		GenesisValidatorRoot: libcommon.HexToHash("4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95"),
 		GenesisTime:          1606824023,
 	},
 	SepoliaNetwork: {
-		GenesisValidatorRoot: common.HexToHash("d8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078"),
+		GenesisValidatorRoot: libcommon.HexToHash("d8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078"),
 		GenesisTime:          1655733600,
 	},
 	GoerliNetwork: {
-		GenesisValidatorRoot: common.HexToHash("043db0d9a83813551ee2f33450d23797757d430911a9320530ad8a0eabc43efb"),
+		GenesisValidatorRoot: libcommon.HexToHash("043db0d9a83813551ee2f33450d23797757d430911a9320530ad8a0eabc43efb"),
 		GenesisTime:          1616508000,
+	},
+	GnosisNetwork: {
+		GenesisValidatorRoot: libcommon.HexToHash("f5dcb5564e829aab27264b9becd5dfaa017085611224cb3036f573368dbb9d47"),
+		GenesisTime:          1638993340,
+	},
+	ChiadoNetwork: {
+		GenesisValidatorRoot: libcommon.HexToHash("9d642dac73058fbf39c0ae41ab1e34e4d889043cb199851ded7095bc99eb4c1e"),
+		GenesisTime:          1665396300,
 	},
 }
 
 // Trusted checkpoint sync endpoints: https://eth-clients.github.io/checkpoint-sync-endpoints/
 var CheckpointSyncEndpoints = map[NetworkType][]string{
 	MainnetNetwork: {
-		"https://beaconstate.ethstaker.cc/eth/v2/debug/beacon/states/finalized",
 		"https://sync.invis.tools/eth/v2/debug/beacon/states/finalized",
 		"https://mainnet-checkpoint-sync.attestant.io/eth/v2/debug/beacon/states/finalized",
 		"https://mainnet.checkpoint.sigp.io/eth/v2/debug/beacon/states/finalized",
@@ -197,7 +272,6 @@ var CheckpointSyncEndpoints = map[NetworkType][]string{
 	},
 	GoerliNetwork: {
 		"https://goerli.beaconstate.info/eth/v2/debug/beacon/states/finalized",
-		"https://goerli.beaconstate.ethstaker.cc/eth/v2/debug/beacon/states/finalized",
 		"https://goerli-sync.invis.tools/eth/v2/debug/beacon/states/finalized",
 		"https://goerli.checkpoint-sync.ethdevops.io/eth/v2/debug/beacon/states/finalized",
 		"https://prater-checkpoint-sync.stakely.io/eth/v2/debug/beacon/states/finalized",
@@ -205,6 +279,13 @@ var CheckpointSyncEndpoints = map[NetworkType][]string{
 	SepoliaNetwork: {
 		"https://sepolia.checkpoint-sync.ethdevops.io/eth/v2/debug/beacon/states/finalized",
 		"https://sepolia.beaconstate.info/eth/v2/debug/beacon/states/finalized",
+	},
+	GnosisNetwork: {
+		"https://checkpoint.gnosis.gateway.fm/eth/v2/debug/beacon/states/finalized",
+		"https://checkpoint.gnosischain.com/eth/v2/debug/beacon/states/finalized",
+	},
+	ChiadoNetwork: {
+		"https://checkpoint.chiadochain.net/eth/v2/debug/beacon/states/finalized",
 	},
 }
 
@@ -292,11 +373,14 @@ type BeaconChainConfig struct {
 	ProportionalSlashingMultiplier uint64 `yaml:"PROPORTIONAL_SLASHING_MULTIPLIER" spec:"true"` // ProportionalSlashingMultiplier is used as a multiplier on slashed penalties.
 
 	// Max operations per block constants.
-	MaxProposerSlashings uint64 `yaml:"MAX_PROPOSER_SLASHINGS" spec:"true"` // MaxProposerSlashings defines the maximum number of slashings of proposers possible in a block.
-	MaxAttesterSlashings uint64 `yaml:"MAX_ATTESTER_SLASHINGS" spec:"true"` // MaxAttesterSlashings defines the maximum number of casper FFG slashings possible in a block.
-	MaxAttestations      uint64 `yaml:"MAX_ATTESTATIONS" spec:"true"`       // MaxAttestations defines the maximum allowed attestations in a beacon block.
-	MaxDeposits          uint64 `yaml:"MAX_DEPOSITS" spec:"true"`           // MaxDeposits defines the maximum number of validator deposits in a block.
-	MaxVoluntaryExits    uint64 `yaml:"MAX_VOLUNTARY_EXITS" spec:"true"`    // MaxVoluntaryExits defines the maximum number of validator exits in a block.
+	MaxProposerSlashings             uint64 `yaml:"MAX_PROPOSER_SLASHINGS" spec:"true"`               // MaxProposerSlashings defines the maximum number of slashings of proposers possible in a block.
+	MaxAttesterSlashings             uint64 `yaml:"MAX_ATTESTER_SLASHINGS" spec:"true"`               // MaxAttesterSlashings defines the maximum number of casper FFG slashings possible in a block.
+	MaxAttestations                  uint64 `yaml:"MAX_ATTESTATIONS" spec:"true"`                     // MaxAttestations defines the maximum allowed attestations in a beacon block.
+	MaxDeposits                      uint64 `yaml:"MAX_DEPOSITS" spec:"true"`                         // MaxDeposits defines the maximum number of validator deposits in a block.
+	MaxVoluntaryExits                uint64 `yaml:"MAX_VOLUNTARY_EXITS" spec:"true"`                  // MaxVoluntaryExits defines the maximum number of validator exits in a block.
+	MaxWithdrawalsPerPayload         uint64 `yaml:"MAX_WITHDRAWALS_PER_PAYLOAD" spec:"true"`          // MaxWithdrawalsPerPayload defines the maximum number of withdrawals in a block.
+	MaxBlsToExecutionChanges         uint64 `yaml:"MAX_BLS_TO_EXECUTION_CHANGES" spec:"true"`         // MaxBlsToExecutionChanges defines the maximum number of BLS-to-execution-change objects in a block.
+	MaxValidatorsPerWithdrawalsSweep uint64 `yaml:"MAX_VALIDATORS_PER_WITHDRAWALS_SWEEP" spec:"true"` //MaxValidatorsPerWithdrawalsSweep bounds the size of the sweep searching for withdrawals per slot.
 
 	// BLS domain values.
 	DomainBeaconProposer              [4]byte `yaml:"DOMAIN_BEACON_PROPOSER" spec:"true"`                // DomainBeaconProposer defines the BLS signature domain for beacon proposal verification.
@@ -338,15 +422,15 @@ type BeaconChainConfig struct {
 	SlashingProtectionPruningEpochs uint64 // SlashingProtectionPruningEpochs defines a period after which all prior epochs are pruned in the validator database.
 
 	// Fork-related values.
-	GenesisForkVersion   []byte `yaml:"GENESIS_FORK_VERSION" spec:"true"`   // GenesisForkVersion is used to track fork version between state transitions.
-	AltairForkVersion    []byte `yaml:"ALTAIR_FORK_VERSION" spec:"true"`    // AltairForkVersion is used to represent the fork version for altair.
-	AltairForkEpoch      uint64 `yaml:"ALTAIR_FORK_EPOCH" spec:"true"`      // AltairForkEpoch is used to represent the assigned fork epoch for altair.
-	BellatrixForkVersion []byte `yaml:"BELLATRIX_FORK_VERSION" spec:"true"` // BellatrixForkVersion is used to represent the fork version for bellatrix.
-	BellatrixForkEpoch   uint64 `yaml:"BELLATRIX_FORK_EPOCH" spec:"true"`   // BellatrixForkEpoch is used to represent the assigned fork epoch for bellatrix.
-	ShardingForkVersion  []byte `yaml:"SHARDING_FORK_VERSION" spec:"true"`  // ShardingForkVersion is used to represent the fork version for sharding.
-	ShardingForkEpoch    uint64 `yaml:"SHARDING_FORK_EPOCH" spec:"true"`    // ShardingForkEpoch is used to represent the assigned fork epoch for sharding.
-	CapellaForkVersion   []byte `yaml:"CAPELLA_FORK_VERSION" spec:"true"`   // CapellaForkVersion is used to represent the fork version for capella.
-	CapellaForkEpoch     uint64 `yaml:"CAPELLA_FORK_EPOCH" spec:"true"`     // CapellaForkEpoch is used to represent the assigned fork epoch for capella.
+	GenesisForkVersion   uint32 `yaml:"GENESIS_FORK_VERSION" spec:"true"`   // GenesisForkVersion is used to track fork version between state transitions.
+	AltairForkVersion    uint32 `yaml:"ALTAIR_FORK_VERSION" spec:"true"`    // AltairForkVersion is used to represent the fork version for Altair.
+	AltairForkEpoch      uint64 `yaml:"ALTAIR_FORK_EPOCH" spec:"true"`      // AltairForkEpoch is used to represent the assigned fork epoch for Altair.
+	BellatrixForkVersion uint32 `yaml:"BELLATRIX_FORK_VERSION" spec:"true"` // BellatrixForkVersion is used to represent the fork version for Bellatrix.
+	BellatrixForkEpoch   uint64 `yaml:"BELLATRIX_FORK_EPOCH" spec:"true"`   // BellatrixForkEpoch is used to represent the assigned fork epoch for Bellatrix.
+	CapellaForkVersion   uint32 `yaml:"CAPELLA_FORK_VERSION" spec:"true"`   // CapellaForkVersion is used to represent the fork version for Capella.
+	CapellaForkEpoch     uint64 `yaml:"CAPELLA_FORK_EPOCH" spec:"true"`     // CapellaForkEpoch is used to represent the assigned fork epoch for Capella.
+	DenebForkVersion     uint32 `yaml:"DENEB_FORK_VERSION" spec:"true"`     // DenebForkVersion is used to represent the fork version for Deneb.
+	DenebForkEpoch       uint64 `yaml:"DENEB_FORK_EPOCH" spec:"true"`       // DenebForkEpoch is used to represent the assigned fork epoch for Deneb.
 
 	ForkVersionSchedule map[[VersionLength]byte]uint64 // Schedule of fork epochs by version.
 	ForkVersionNames    map[[VersionLength]byte]string // Human-readable names of fork versions.
@@ -391,16 +475,28 @@ type BeaconChainConfig struct {
 	MinSyncCommitteeParticipants uint64 `yaml:"MIN_SYNC_COMMITTEE_PARTICIPANTS" spec:"true"` // MinSyncCommitteeParticipants defines the minimum amount of sync committee participants for which the light client acknowledges the signature.
 
 	// Bellatrix
-	TerminalBlockHash                common.Hash    `yaml:"TERMINAL_BLOCK_HASH" spec:"true"`                  // TerminalBlockHash of beacon chain.
-	TerminalBlockHashActivationEpoch uint64         `yaml:"TERMINAL_BLOCK_HASH_ACTIVATION_EPOCH" spec:"true"` // TerminalBlockHashActivationEpoch of beacon chain.
-	TerminalTotalDifficulty          string         `yaml:"TERMINAL_TOTAL_DIFFICULTY" spec:"true"`            // TerminalTotalDifficulty is part of the experimental Bellatrix spec. This value is type is currently TBD.
-	DefaultFeeRecipient              common.Address // DefaultFeeRecipient where the transaction fee goes to.
-	EthBurnAddressHex                string         // EthBurnAddressHex is the constant eth address written in hex format to burn fees in that network. the default is 0x0
-	DefaultBuilderGasLimit           uint64         // DefaultBuilderGasLimit is the default used to set the gaslimit for the Builder APIs, typically at around 30M wei.
+	TerminalBlockHash                libcommon.Hash    `yaml:"TERMINAL_BLOCK_HASH" spec:"true"`                  // TerminalBlockHash of beacon chain.
+	TerminalBlockHashActivationEpoch uint64            `yaml:"TERMINAL_BLOCK_HASH_ACTIVATION_EPOCH" spec:"true"` // TerminalBlockHashActivationEpoch of beacon chain.
+	TerminalTotalDifficulty          string            `yaml:"TERMINAL_TOTAL_DIFFICULTY" spec:"true"`            // TerminalTotalDifficulty is part of the experimental Bellatrix spec. This value is type is currently TBD.
+	DefaultFeeRecipient              libcommon.Address // DefaultFeeRecipient where the transaction fee goes to.
+	EthBurnAddressHex                string            // EthBurnAddressHex is the constant eth address written in hex format to burn fees in that network. the default is 0x0
+	DefaultBuilderGasLimit           uint64            // DefaultBuilderGasLimit is the default used to set the gaslimit for the Builder APIs, typically at around 30M wei.
 
 	// Mev-boost circuit breaker
 	MaxBuilderConsecutiveMissedSlots uint64 // MaxBuilderConsecutiveMissedSlots defines the number of consecutive skip slot to fallback from using relay/builder to local execution engine for block construction.
 	MaxBuilderEpochMissedSlots       uint64 // MaxBuilderEpochMissedSlots is defines the number of total skip slot (per epoch rolling windows) to fallback from using relay/builder to local execution engine for block construction.
+}
+
+func (b *BeaconChainConfig) GetCurrentStateVersion(epoch uint64) StateVersion {
+	forkEpochList := []uint64{b.AltairForkEpoch, b.BellatrixForkEpoch, b.CapellaForkEpoch}
+	stateVersion := Phase0Version
+	for _, forkEpoch := range forkEpochList {
+		if forkEpoch > epoch {
+			return stateVersion
+		}
+		stateVersion++
+	}
+	return stateVersion
 }
 
 // InitializeForkSchedule initializes the schedules forks baked into the config.
@@ -416,18 +512,28 @@ func toBytes4(in []byte) (ret [4]byte) {
 
 func configForkSchedule(b *BeaconChainConfig) map[[VersionLength]byte]uint64 {
 	fvs := map[[VersionLength]byte]uint64{}
-	fvs[toBytes4(b.GenesisForkVersion)] = b.GenesisEpoch
-	fvs[toBytes4(b.AltairForkVersion)] = b.AltairForkEpoch
-	fvs[toBytes4(b.BellatrixForkVersion)] = b.BellatrixForkEpoch
+	fvs[utils.Uint32ToBytes4(b.GenesisForkVersion)] = 0
+	fvs[utils.Uint32ToBytes4(b.AltairForkVersion)] = b.AltairForkEpoch
+	fvs[utils.Uint32ToBytes4(b.BellatrixForkVersion)] = b.BellatrixForkEpoch
+	fvs[utils.Uint32ToBytes4(b.CapellaForkVersion)] = b.CapellaForkEpoch
 	return fvs
 }
 
 func configForkNames(b *BeaconChainConfig) map[[VersionLength]byte]string {
 	fvn := map[[VersionLength]byte]string{}
-	fvn[toBytes4(b.GenesisForkVersion)] = "phase0"
-	fvn[toBytes4(b.AltairForkVersion)] = "altair"
-	fvn[toBytes4(b.BellatrixForkVersion)] = "bellatrix"
+	fvn[utils.Uint32ToBytes4(b.GenesisForkVersion)] = "phase0"
+	fvn[utils.Uint32ToBytes4(b.AltairForkVersion)] = "altair"
+	fvn[utils.Uint32ToBytes4(b.BellatrixForkVersion)] = "bellatrix"
+	fvn[utils.Uint32ToBytes4(b.CapellaForkVersion)] = "capella"
 	return fvn
+}
+
+func (b *BeaconChainConfig) ParticipationWeights() []uint64 {
+	return []uint64{
+		b.TimelySourceWeight,
+		b.TimelyTargetWeight,
+		b.TimelyHeadWeight,
+	}
 }
 
 var MainnetBeaconConfig BeaconChainConfig = BeaconChainConfig{
@@ -514,11 +620,14 @@ var MainnetBeaconConfig BeaconChainConfig = BeaconChainConfig{
 	ProportionalSlashingMultiplier: 1,
 
 	// Max operations per block constants.
-	MaxProposerSlashings: 16,
-	MaxAttesterSlashings: 2,
-	MaxAttestations:      128,
-	MaxDeposits:          16,
-	MaxVoluntaryExits:    16,
+	MaxProposerSlashings:             16,
+	MaxAttesterSlashings:             2,
+	MaxAttestations:                  128,
+	MaxDeposits:                      16,
+	MaxVoluntaryExits:                16,
+	MaxWithdrawalsPerPayload:         16,
+	MaxBlsToExecutionChanges:         16,
+	MaxValidatorsPerWithdrawalsSweep: 16384,
 
 	// BLS domain values.
 	DomainBeaconProposer:              utils.Uint32ToBytes4(0x00000000),
@@ -563,16 +672,15 @@ var MainnetBeaconConfig BeaconChainConfig = BeaconChainConfig{
 	SafetyDecay: 10,
 
 	// Fork related values.
-	GenesisEpoch:         0,
-	GenesisForkVersion:   []byte{0, 0, 0, 0},
-	AltairForkVersion:    []byte{1, 0, 0, 0},
+	GenesisForkVersion:   0,
+	AltairForkVersion:    0x01000000,
 	AltairForkEpoch:      74240,
-	BellatrixForkVersion: []byte{2, 0, 0, 0},
+	BellatrixForkVersion: 0x02000000,
 	BellatrixForkEpoch:   144869,
-	CapellaForkVersion:   []byte{3, 0, 0, 0},
+	CapellaForkVersion:   0x03000000,
 	CapellaForkEpoch:     math.MaxUint64,
-	ShardingForkVersion:  []byte{4, 0, 0, 0},
-	ShardingForkEpoch:    math.MaxUint64,
+	DenebForkVersion:     0x04000000,
+	DenebForkEpoch:       math.MaxUint64,
 
 	// New values introduced in Altair hard fork 1.
 	// Participation flag indices.
@@ -627,20 +735,46 @@ func mainnetConfig() BeaconChainConfig {
 	return cfg
 }
 
+func CustomConfig(configFile string) (BeaconChainConfig, error) {
+	cfg := MainnetBeaconConfig
+	b, err := os.ReadFile(configFile) // just pass the file name
+	if err != nil {
+		return BeaconChainConfig{}, nil
+	}
+	err = yaml.Unmarshal(b, &cfg)
+	cfg.InitializeForkSchedule()
+	return cfg, err
+}
+
+func ParseGenesisSSZToGenesisConfig(genesisFile string) (GenesisConfig, error) {
+	cfg := GenesisConfig{}
+	b, err := os.ReadFile(genesisFile) // just pass the file name
+	if err != nil {
+		return GenesisConfig{}, nil
+	}
+	// Read first 2 fields of SSZ
+	cfg.GenesisTime = ssz.UnmarshalUint64SSZ(b)
+	copy(cfg.GenesisValidatorRoot[:], b[8:])
+	return cfg, nil
+}
+
 func sepoliaConfig() BeaconChainConfig {
 	cfg := MainnetBeaconConfig
 	cfg.MinGenesisTime = 1655647200
 	cfg.GenesisDelay = 86400
 	cfg.MinGenesisActiveValidatorCount = 1300
 	cfg.ConfigName = "sepolia"
-	cfg.GenesisForkVersion = []byte{0x90, 0x00, 0x00, 0x69}
+
+	cfg.GenesisForkVersion = 0x90000069
 	cfg.SecondsPerETH1Block = 14
 	cfg.DepositChainID = uint64(SepoliaNetwork)
 	cfg.DepositNetworkID = uint64(SepoliaNetwork)
 	cfg.AltairForkEpoch = 50
-	cfg.AltairForkVersion = []byte{0x90, 0x00, 0x00, 0x70}
+	cfg.AltairForkVersion = 0x90000070
 	cfg.BellatrixForkEpoch = 100
-	cfg.BellatrixForkVersion = []byte{0x90, 0x00, 0x00, 0x71}
+	cfg.BellatrixForkVersion = 0x90000071
+	cfg.CapellaForkEpoch = 56832
+	cfg.CapellaForkVersion = 0x90000072
 	cfg.TerminalTotalDifficulty = "17000000000000000"
 	cfg.DepositContractAddress = "0x7f02C3E3c98b133055B8B348B2Ac625669Ed295D"
 	cfg.InitializeForkSchedule()
@@ -652,20 +786,103 @@ func goerliConfig() BeaconChainConfig {
 	cfg.MinGenesisTime = 1614588812
 	cfg.GenesisDelay = 1919188
 	cfg.ConfigName = "prater"
-	cfg.GenesisForkVersion = []byte{0x00, 0x00, 0x10, 0x20}
+	cfg.GenesisForkVersion = 0x00001020
 	cfg.SecondsPerETH1Block = 14
 	cfg.DepositChainID = uint64(GoerliNetwork)
 	cfg.DepositNetworkID = uint64(GoerliNetwork)
 	cfg.AltairForkEpoch = 36660
-	cfg.AltairForkVersion = []byte{0x1, 0x0, 0x10, 0x20}
-	cfg.CapellaForkVersion = []byte{0x3, 0x0, 0x10, 0x20}
-	cfg.ShardingForkVersion = []byte{0x4, 0x0, 0x10, 0x20}
+	cfg.AltairForkVersion = 0x1001020
 	cfg.BellatrixForkEpoch = 112260
-	cfg.BellatrixForkVersion = []byte{0x2, 0x0, 0x10, 0x20}
+	cfg.BellatrixForkVersion = 0x02001020
+	cfg.CapellaForkEpoch = 162304
+	cfg.CapellaForkVersion = 0x03001020
+	cfg.DenebForkVersion = 0x40001020
 	cfg.TerminalTotalDifficulty = "10790000"
 	cfg.DepositContractAddress = "0xff50ed3d0ec03aC01D4C79aAd74928BFF48a7b2b"
 	cfg.InitializeForkSchedule()
 	return cfg
+}
+
+func gnosisConfig() BeaconChainConfig {
+	cfg := MainnetBeaconConfig
+	cfg.MinGenesisTime = 1638968400
+	cfg.MinGenesisActiveValidatorCount = 4096
+	cfg.GenesisDelay = 6000
+	cfg.SecondsPerSlot = 5
+	cfg.Eth1FollowDistance = 1024
+	cfg.ConfigName = "gnosis"
+	cfg.ChurnLimitQuotient = 1 << 12
+	cfg.GenesisForkVersion = 0x00000064
+	cfg.SecondsPerETH1Block = 6
+	cfg.DepositChainID = uint64(GnosisNetwork)
+	cfg.DepositNetworkID = uint64(GnosisNetwork)
+	cfg.AltairForkEpoch = 512
+	cfg.AltairForkVersion = 0x01000064
+	cfg.BellatrixForkEpoch = 385536
+	cfg.BellatrixForkVersion = 0x02000064
+	cfg.TerminalTotalDifficulty = "8626000000000000000000058750000000000000000000"
+	cfg.DepositContractAddress = "0x0B98057eA310F4d31F2a452B414647007d1645d9"
+	cfg.BaseRewardFactor = 25
+	cfg.SlotsPerEpoch = 16
+	cfg.EpochsPerSyncCommitteePeriod = 512
+	cfg.InitializeForkSchedule()
+	return cfg
+}
+
+func chiadoConfig() BeaconChainConfig {
+	cfg := MainnetBeaconConfig
+	cfg.MinGenesisTime = 1665396000
+	cfg.MinGenesisActiveValidatorCount = 6000
+	cfg.GenesisDelay = 300
+	cfg.SecondsPerSlot = 5
+	cfg.Eth1FollowDistance = 1024
+	cfg.ConfigName = "chiado"
+	cfg.ChurnLimitQuotient = 1 << 12
+	cfg.GenesisForkVersion = 0x0000006f
+	cfg.SecondsPerETH1Block = 6
+	cfg.DepositChainID = uint64(ChiadoNetwork)
+	cfg.DepositNetworkID = uint64(ChiadoNetwork)
+	cfg.AltairForkEpoch = 90
+	cfg.AltairForkVersion = 0x0100006f
+	cfg.BellatrixForkEpoch = 180
+	cfg.BellatrixForkVersion = 0x0200006f
+	cfg.TerminalTotalDifficulty = "231707791542740786049188744689299064356246512"
+	cfg.DepositContractAddress = "0xb97036A26259B7147018913bD58a774cf91acf25"
+	cfg.BaseRewardFactor = 25
+	cfg.SlotsPerEpoch = 16
+	cfg.EpochsPerSyncCommitteePeriod = 512
+	cfg.InitializeForkSchedule()
+	return cfg
+}
+
+func (b *BeaconChainConfig) GetMinSlashingPenaltyQuotient(version StateVersion) uint64 {
+	switch version {
+	case Phase0Version:
+		return b.MinSlashingPenaltyQuotient
+	case AltairVersion:
+		return b.MinSlashingPenaltyQuotientAltair
+	case BellatrixVersion:
+		return b.MinSlashingPenaltyQuotientBellatrix
+	case CapellaVersion:
+		return b.MinSlashingPenaltyQuotientBellatrix
+	default:
+		panic("not implemented")
+	}
+}
+
+func (b *BeaconChainConfig) GetPenaltyQuotient(version StateVersion) uint64 {
+	switch version {
+	case Phase0Version:
+		return b.InactivityPenaltyQuotient
+	case AltairVersion:
+		return b.InactivityPenaltyQuotientAltair
+	case BellatrixVersion:
+		return b.InactivityPenaltyQuotientBellatrix
+	case CapellaVersion:
+		return b.InactivityPenaltyQuotientBellatrix
+	default:
+		panic("not implemented")
+	}
 }
 
 // Beacon configs
@@ -673,6 +890,8 @@ var BeaconConfigs map[NetworkType]BeaconChainConfig = map[NetworkType]BeaconChai
 	MainnetNetwork: mainnetConfig(),
 	SepoliaNetwork: sepoliaConfig(),
 	GoerliNetwork:  goerliConfig(),
+	GnosisNetwork:  gnosisConfig(),
+	ChiadoNetwork:  chiadoConfig(),
 }
 
 func GetConfigsByNetwork(net NetworkType) (*GenesisConfig, *NetworkConfig, *BeaconChainConfig) {
@@ -693,6 +912,12 @@ func GetConfigsByNetworkName(net string) (*GenesisConfig, *NetworkConfig, *Beaco
 	case networkname.SepoliaChainName:
 		genesisCfg, networkCfg, beaconCfg := GetConfigsByNetwork(SepoliaNetwork)
 		return genesisCfg, networkCfg, beaconCfg, SepoliaNetwork, nil
+	case networkname.GnosisChainName:
+		genesisCfg, networkCfg, beaconCfg := GetConfigsByNetwork(GnosisNetwork)
+		return genesisCfg, networkCfg, beaconCfg, GnosisNetwork, nil
+	case networkname.ChiadoChainName:
+		genesisCfg, networkCfg, beaconCfg := GetConfigsByNetwork(ChiadoNetwork)
+		return genesisCfg, networkCfg, beaconCfg, ChiadoNetwork, nil
 	default:
 		return nil, nil, nil, MainnetNetwork, fmt.Errorf("chain not found")
 	}
@@ -713,6 +938,14 @@ func GetCheckpointSyncEndpoint(net NetworkType) string {
 // 1 is Ethereum Mainnet
 // 5 is Goerli Testnet
 // 11155111 is Sepolia Testnet
+// 100 is Gnosis Mainnet
+// 10200 is Chiado Testnet
 func EmbeddedSupported(id uint64) bool {
+	return id == 1 || id == 5 || id == 11155111 || id == 100 || id == 10200
+}
+
+// Subset of supported networks where embedded CL is stable enough
+// (sufficient number of light-client peers) as to be enabled by default
+func EmbeddedEnabledByDefault(id uint64) bool {
 	return id == 1 || id == 5 || id == 11155111
 }

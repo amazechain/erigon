@@ -22,6 +22,7 @@ import (
 	"math/big"
 
 	"github.com/holiman/uint256"
+	"github.com/ledgerwatch/erigon-lib/chain"
 
 	"github.com/ledgerwatch/erigon/core/state"
 	"github.com/ledgerwatch/erigon/core/types"
@@ -47,7 +48,7 @@ var (
 //	   with the fork specific extra-data set
 //	b) if the node is pro-fork, require blocks in the specific range to have the
 //	   unique extra-data set.
-func VerifyDAOHeaderExtraData(config *params.ChainConfig, header *types.Header) error {
+func VerifyDAOHeaderExtraData(config *chain.Config, header *types.Header) error {
 	// Short circuit validation if the node doesn't care about the DAO fork
 	if config.DAOForkBlock == nil {
 		return nil
@@ -57,15 +58,8 @@ func VerifyDAOHeaderExtraData(config *params.ChainConfig, header *types.Header) 
 	if header.Number.Cmp(config.DAOForkBlock) < 0 || header.Number.Cmp(limit) >= 0 {
 		return nil
 	}
-	// Depending on whether we support or oppose the fork, validate the extra-data contents
-	if config.DAOForkSupport {
-		if !bytes.Equal(header.Extra, params.DAOForkBlockExtra) {
-			return ErrBadProDAOExtra
-		}
-	} else {
-		if bytes.Equal(header.Extra, params.DAOForkBlockExtra) {
-			return ErrBadNoDAOExtra
-		}
+	if !bytes.Equal(header.Extra, params.DAOForkBlockExtra) {
+		return ErrBadProDAOExtra
 	}
 	// All ok, header has the same extra-data we expect
 	return nil

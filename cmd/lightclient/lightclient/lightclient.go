@@ -25,13 +25,13 @@ import (
 	"github.com/ledgerwatch/erigon-lib/gointerfaces/remote"
 	"github.com/ledgerwatch/erigon-lib/gointerfaces/sentinel"
 	"github.com/ledgerwatch/erigon-lib/kv"
+	"github.com/ledgerwatch/log/v3"
+
 	"github.com/ledgerwatch/erigon/cl/clparams"
 	"github.com/ledgerwatch/erigon/cl/cltypes"
 	"github.com/ledgerwatch/erigon/cl/rpc"
 	"github.com/ledgerwatch/erigon/cl/utils"
 	"github.com/ledgerwatch/erigon/cmd/erigon-cl/core/rawdb"
-	"github.com/ledgerwatch/erigon/common"
-	"github.com/ledgerwatch/log/v3"
 )
 
 const (
@@ -47,33 +47,37 @@ type LightClient struct {
 	chainTip      *ChainTipSubscriber
 
 	verbose              bool
-	highestSeen          uint64      // Highest ETH1 block seen.
-	highestValidated     uint64      // Highest ETH2 slot validated.
-	highestProcessedRoot common.Hash // Highest processed ETH2 block root.
-	lastEth2ParentRoot   common.Hash // Last ETH2 Parent root.
-	finalizedEth1Hash    common.Hash
+	highestSeen          uint64       // Highest ETH1 block seen.
+	highestValidated     uint64       // Highest ETH2 slot validated.
+	highestProcessedRoot common2.Hash // Highest processed ETH2 block root.
+	lastEth2ParentRoot   common2.Hash // Last ETH2 Parent root.
+	finalizedEth1Hash    common2.Hash
 	recentHashesCache    *lru.Cache
 	db                   kv.RwDB
 	rpc                  *rpc.BeaconRpcP2P
-	execution            remote.ETHBACKENDServer
-	store                *LightClientStore
+	// Either execution server or client
+	execution       remote.ETHBACKENDServer
+	executionClient remote.ETHBACKENDClient
+	store           *LightClientStore
 }
 
 func NewLightClient(ctx context.Context, db kv.RwDB, genesisConfig *clparams.GenesisConfig, beaconConfig *clparams.BeaconChainConfig,
-	execution remote.ETHBACKENDServer, sentinel sentinel.SentinelClient,
+	execution remote.ETHBACKENDServer, executionClient remote.ETHBACKENDClient, sentinel sentinel.SentinelClient,
 	highestSeen uint64, verbose bool) (*LightClient, error) {
 	recentHashesCache, err := lru.New(maxRecentHashes)
+	rpc := rpc.NewBeaconRpcP2P(ctx, sentinel, beaconConfig, genesisConfig)
 	return &LightClient{
 		ctx:               ctx,
 		beaconConfig:      beaconConfig,
 		genesisConfig:     genesisConfig,
 		chainTip:          NewChainTipSubscriber(ctx, beaconConfig, genesisConfig, sentinel),
 		recentHashesCache: recentHashesCache,
-		rpc:               rpc.NewBeaconRpcP2P(ctx, sentinel, beaconConfig, genesisConfig),
+		rpc:               rpc,
 		execution:         execution,
 		verbose:           verbose,
 		highestSeen:       highestSeen,
 		db:                db,
+		executionClient:   executionClient,
 	}, err
 }
 
@@ -90,7 +94,6 @@ func (l *LightClient) Start() {
 	defer tx.Rollback()
 	logPeers := time.NewTicker(time.Minute)
 
-	updateStatusSentinel := time.NewTicker(2 * time.Minute)
 	go l.chainTip.StartLoop()
 	for {
 		start := time.Now()
@@ -150,8 +153,8 @@ func (l *LightClient) Start() {
 		// log new validated segment
 		if len(updates) > 0 {
 			lastValidated := updates[len(updates)-1]
-			l.highestValidated = lastValidated.AttestedHeader.Slot
-			l.highestProcessedRoot, err = lastValidated.AttestedHeader.HashTreeRoot()
+			l.highestValidated = lastValidated.AttestedHeader.HeaderEth2.Slot
+			l.highestProcessedRoot, err = lastValidated.AttestedHeader.HeaderEth2.HashSSZ()
 			if err != nil {
 				log.Warn("could not compute root", "err", err)
 				continue
@@ -196,8 +199,8 @@ func (l *LightClient) Start() {
 				var m runtime.MemStats
 				dbg.ReadMemStats(&m)
 				log.Info("[LightClient] Validated Chain Segments",
-					"elapsed", time.Since(start), "from", updates[0].AttestedHeader.Slot-1,
-					"to", lastValidated.AttestedHeader.Slot, "alloc", common2.ByteCount(m.Alloc), "sys", common2.ByteCount(m.Sys))
+					"elapsed", time.Since(start), "from", updates[0].AttestedHeader.HeaderEth2.Slot-1,
+					"to", lastValidated.AttestedHeader.HeaderEth2.Slot, "alloc", common2.ByteCount(m.Alloc), "sys", common2.ByteCount(m.Sys))
 			}
 		}
 		l.importBlockIfPossible()
@@ -215,14 +218,6 @@ func (l *LightClient) Start() {
 				continue
 			}
 			log.Info("[LightClient] P2P", "peers", peers)
-		case <-updateStatusSentinel.C:
-			if err := l.updateStatus(); err != nil {
-				if errors.Is(err, context.Canceled) {
-					return
-				}
-				log.Error("Could not update sentinel status", "err", err)
-				return
-			}
 		case <-l.ctx.Done():
 			return
 		}
@@ -239,19 +234,16 @@ func (l *LightClient) importBlockIfPossible() {
 	if curr.Slot > l.highestValidated+maxChainExtension {
 		return
 	}
-	currentRoot, err := curr.HashTreeRoot()
+	currentRoot, err := curr.HashSSZ()
 	if err != nil {
 		log.Warn("Could not send beacon block to ETH1", "err", err)
 		return
 	}
 
-	finalizedEth2Root, err := l.store.finalizedHeader.HashTreeRoot()
-	if err != nil {
-		return
-	}
-	if finalizedEth2Root == currentRoot {
+	if (curr.Slot+1)%l.beaconConfig.SlotsPerEpoch == 0 {
 		l.finalizedEth1Hash = curr.Body.ExecutionPayload.BlockHash
 	}
+
 	if l.lastEth2ParentRoot != l.highestProcessedRoot && l.highestProcessedRoot != curr.ParentRoot {
 		l.lastEth2ParentRoot = curr.ParentRoot
 		return
@@ -273,16 +265,4 @@ func (l *LightClient) importBlockIfPossible() {
 	} else {
 		l.highestSeen = eth1Number
 	}
-}
-
-func (l *LightClient) updateStatus() error {
-	finalizedRoot, err := l.store.finalizedHeader.HashTreeRoot()
-	if err != nil {
-		return err
-	}
-	headRoot, err := l.store.optimisticHeader.HashTreeRoot()
-	if err != nil {
-		return err
-	}
-	return l.rpc.SetStatus(finalizedRoot, l.store.finalizedHeader.Slot/32, headRoot, l.store.optimisticHeader.Slot)
 }

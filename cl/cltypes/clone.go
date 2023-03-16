@@ -1,59 +1,95 @@
 package cltypes
 
-import "github.com/ledgerwatch/erigon/cmd/sentinel/sentinel/communication"
+import "github.com/ledgerwatch/erigon/cl/cltypes/clonable"
 
-func (*SignedBeaconBlockBellatrix) Clone() communication.Packet {
-	return &SignedBeaconBlockBellatrix{}
+func (*SignedBeaconBlock) Clone() clonable.Clonable {
+	return &SignedBeaconBlock{}
 }
 
-func (*SignedAggregateAndProof) Clone() communication.Packet {
-	return &SignedAggregateAndProof{}
+func (*PendingAttestation) Clone() clonable.Clonable {
+	return &PendingAttestation{}
 }
 
-func (*SignedVoluntaryExit) Clone() communication.Packet {
-	return &SignedVoluntaryExit{}
+func (*Eth1Block) Clone() clonable.Clonable {
+	return &Eth1Block{}
 }
 
-func (*ProposerSlashing) Clone() communication.Packet {
-	return &ProposerSlashing{}
+func (*BeaconBlocksByRootRequest) Clone() clonable.Clonable {
+	return &BeaconBlocksByRootRequest{}
 }
 
-func (*AttesterSlashing) Clone() communication.Packet {
-	return &AttesterSlashing{}
+func (*Eth1Data) Clone() clonable.Clonable {
+	return &Eth1Data{}
 }
 
-func (*LightClientFinalityUpdate) Clone() communication.Packet {
-	return &LightClientFinalityUpdate{}
+func (*SignedBLSToExecutionChange) Clone() clonable.Clonable {
+	return &SignedBLSToExecutionChange{}
 }
 
-func (*LightClientOptimisticUpdate) Clone() communication.Packet {
-	return &LightClientOptimisticUpdate{}
+func (*HistoricalSummary) Clone() clonable.Clonable {
+	return &HistoricalSummary{}
 }
 
-func (*MetadataV1) Clone() communication.Packet {
-	return &MetadataV1{}
+func (*Validator) Clone() clonable.Clonable {
+	return &Validator{}
 }
 
-func (*MetadataV2) Clone() communication.Packet {
-	return &MetadataV2{}
+func (*Attestation) Clone() clonable.Clonable {
+	return &Attestation{}
 }
 
-func (*Ping) Clone() communication.Packet {
-	return &Ping{}
-}
-
-func (*Status) Clone() communication.Packet {
+func (*Status) Clone() clonable.Clonable {
 	return &Status{}
 }
 
-func (*SingleRoot) Clone() communication.Packet {
-	return &SingleRoot{}
+func (*SignedAggregateAndProof) Clone() clonable.Clonable {
+	return &SignedAggregateAndProof{}
 }
 
-func (*LightClientBootstrap) Clone() communication.Packet {
+func (*SyncAggregate) Clone() clonable.Clonable {
+	return &SyncAggregate{}
+}
+
+func (*SignedVoluntaryExit) Clone() clonable.Clonable {
+	return &SignedVoluntaryExit{}
+}
+
+func (*ProposerSlashing) Clone() clonable.Clonable {
+	return &ProposerSlashing{}
+}
+
+func (*AttesterSlashing) Clone() clonable.Clonable {
+	return &AttesterSlashing{}
+}
+
+func (*LightClientFinalityUpdate) Clone() clonable.Clonable {
+	return &LightClientFinalityUpdate{}
+}
+
+func (*LightClientOptimisticUpdate) Clone() clonable.Clonable {
+	return &LightClientOptimisticUpdate{}
+}
+
+func (*Metadata) Clone() clonable.Clonable {
+	return &Metadata{}
+}
+
+func (*Ping) Clone() clonable.Clonable {
+	return &Ping{}
+}
+
+func (*Deposit) Clone() clonable.Clonable {
+	return &Deposit{}
+}
+
+func (*LightClientBootstrap) Clone() clonable.Clonable {
 	return &LightClientBootstrap{}
 }
 
-func (*LightClientUpdate) Clone() communication.Packet {
+func (*BeaconBlock) Clone() clonable.Clonable {
+	return &BeaconBlock{}
+}
+
+func (*LightClientUpdate) Clone() clonable.Clonable {
 	return &LightClientUpdate{}
 }
